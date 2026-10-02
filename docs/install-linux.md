@@ -17,7 +17,7 @@ Arch 包匹配构建时的 librime。系统滚动更新导致版本不匹配时�
 
 ```sh
 sudo apt update
-sudo apt install fcitx5 fcitx5-rime python3-yaml
+sudo apt install fcitx5 fcitx5-rime librime-plugin-lua python3-yaml
 sudo apt install ./beam-ime-0.1.0-beta.1-ubuntu24.04-amd64.deb
 ```
 

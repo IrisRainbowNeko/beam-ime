@@ -46,14 +46,16 @@ def main():
     dist = ROOT / "dist"
     dist.mkdir(exist_ok=True)
     if args.format == "deb":
-        abi_package = subprocess.check_output(["dpkg-query", "-W", "-f=${Package}", "librime1"], text=True).strip()
-        abi_version = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", "librime1"], text=True).strip()
+        installed = subprocess.check_output(['dpkg-query', '-W',
+            '-f=${binary:Package}\t${Version}\t${db:Status-Status}\n', 'librime1*'], text=True)
+        abi_package, abi_version = next((row[0].split(':')[0], row[1])
+            for line in installed.splitlines() if len(row := line.split('\t')) == 3 and row[2] == 'installed')
         metadata = stage / "DEBIAN"
         metadata.mkdir()
         (metadata / "control").write_text(
             f"Package: beam-ime\nVersion: {version.replace('-beta.', '~beta.')}\nArchitecture: amd64\n"
             "Maintainer: Beam contributors\nSection: utils\nPriority: optional\n"
-            f"Depends: fcitx5-rime, {abi_package} (= {abi_version}), python3, python3-yaml, libstdc++6, libc6, libgomp1\n"
+            f"Depends: fcitx5-rime, librime-plugin-lua, {abi_package} (= {abi_version}), python3, python3-yaml, libstdc++6, libc6\n"
             "Recommends: mesa-vulkan-drivers\nDescription: Local keys-conditioned language model input method\n")
         artifact = dist / f"beam-ime-{version}-ubuntu24.04-amd64.deb"
         normalize_permissions(stage)
