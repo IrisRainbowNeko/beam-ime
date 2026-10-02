@@ -26,6 +26,15 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 Section
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=beam-stop.ps1 "${STAGE}\beam-stop.ps1"
+  nsExec::ExecToLog '"${POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "$PLUGINSDIR\beam-stop.ps1" -InstallDir "$INSTDIR"'
+  Pop $0
+  ${If} $0 != 0
+    MessageBox MB_ICONSTOP "无法停止当前 Beam 服务，程序文件尚未覆盖。"
+    Abort
+  ${EndIf}
   SetOutPath "$INSTDIR"
   File /r /x models "${STAGE}\*"
   SetOutPath "$INSTDIR\models"

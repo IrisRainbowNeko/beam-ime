@@ -29,5 +29,7 @@ try {
     $e=$null;$t=$null
     [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../packaging/windows/beam-setup.ps1'),[ref]$t,[ref]$e)
     if ($e) { throw ($e | Out-String) }
+    [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../packaging/windows/beam-stop.ps1'),[ref]$t,[ref]$e)
+    if ($e) { throw ($e | Out-String) }
     Write-Host 'Windows file transaction tests passed.'
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }

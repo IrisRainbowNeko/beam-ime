@@ -41,7 +41,7 @@ def main():
             shutil.copy2(file, stage/("payload/rime.dll" if file.name == "rime.dll" else file.name))
     if not (stage/"beamd.exe").exists() or not (stage/"payload/rime.dll").exists():
         raise ValueError("build the rime and beamd targets first")
-    for name in ("beam-setup.ps1", "Beam.Files.psm1"):
+    for name in ("beam-setup.ps1", "beam-stop.ps1", "Beam.Files.psm1"):
         shutil.copy2(ROOT/"packaging/windows"/name, stage/name)
     shutil.copy2(ROOT/"models/default.json", stage/"models/default.json")
     shutil.copy2(ROOT/"dependencies.lock.json", stage/"dependencies.lock.json")
