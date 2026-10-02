@@ -106,7 +106,10 @@ def main():
             service("daemon-reload")
             print("Beam disabled. Model and user dictionaries were kept. Redeploy Rime once.")
             return 0
-        model_path = args.model or data_dir() / "models/beam-0.6b-q8_0.gguf"
+        settings_path = data_dir() / "settings.json"
+        previous = json.loads(settings_path.read_text()) if settings_path.exists() else {}
+        saved_model = Path(previous["model"]) if previous.get("model") else None
+        model_path = args.model or saved_model or data_dir() / "models/beam-0.6b-q8_0.gguf"
         legacy = data_dir() / "models/beam.gguf"
         if not args.model and not model_path.exists() and legacy.exists(): model_path = legacy
         if not model_path.is_file():
@@ -123,7 +126,7 @@ def main():
         except Exception:
             restore_files(data_dir() / "installed-files")
             raise
-        atomic_write(data_dir() / "settings.json", json.dumps({"model": str(model_path.resolve()), "cpu": args.cpu}).encode())
+        atomic_write(settings_path, json.dumps({"model": str(model_path.resolve()), "cpu": args.cpu or previous.get("cpu", False)}).encode())
         unit = "[Unit]\nDescription=Beam IME\nAfter=graphical-session.target\n\n[Service]\nExecStart=/usr/bin/beamctl run\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n"
         atomic_write(unit_dir / "beam-ime.service", unit.encode())
         service("daemon-reload")

@@ -2,6 +2,7 @@
 param(
     [ValidateSet('Install','Uninstall','SystemInstall','SystemRestore','Doctor')][string]$Action = 'Install',
     [string]$InstallDir = $PSScriptRoot,
+    [string]$Model,
     [switch]$Download,
     [switch]$Cpu
 )
@@ -156,10 +157,20 @@ try {
         Restore-ManagedFiles (Join-Path $State 'files')
     } else {
         $manifest=Get-Content -Raw (Join-Path $InstallDir 'models\default.json') | ConvertFrom-Json
-        $model=Join-Path $State ("models\"+$manifest.filename)
-        $source=Join-Path $InstallDir ('models\'+$manifest.filename)
-        if (-not (Test-Path $source)) { $source=$null }
-        Install-ModelFile $manifest $model $source ([bool]$Download)
+        $settingsPath=Join-Path $State 'settings.json'
+        $settings=if (Test-Path $settingsPath) { Get-Content -Raw $settingsPath | ConvertFrom-Json } else { $null }
+        $legacy=Join-Path $State 'models\beam.gguf'
+        $modelPath=if ($Model) { [IO.Path]::GetFullPath($Model) }
+            elseif ($settings -and $settings.model) { $settings.model }
+            elseif (Test-Path $legacy) { $legacy }
+            else { Join-Path $State ("models\"+$manifest.filename) }
+        if (-not (Test-Path $modelPath)) {
+            if ($Model -or ($settings -and $settings.model)) { throw "Model not found: $modelPath" }
+            $source=Join-Path $InstallDir ('models\'+$manifest.filename)
+            if (-not (Test-Path $source)) { $source=$null }
+            Install-ModelFile $manifest $modelPath $source ([bool]$Download)
+        }
+        $cpuMode=[bool]$Cpu -or ($settings -and $settings.cpu)
         Stop-Weasel $root
         Invoke-SystemStep 'SystemInstall'
         try {
@@ -169,8 +180,9 @@ try {
             })
             Install-ManagedFiles $pairs (Join-Path $State 'files')
             Update-SchemaList (Join-Path $userDir 'default.custom.yaml') $true
-            $args="--supervise --model `"$model`" --log `"$State\beamd.log`""
-            if ($Cpu) { $args += ' --ngl 0' }
+            $args="--supervise --model `"$modelPath`" --log `"$State\beamd.log`""
+            if ($cpuMode) { $args += ' --ngl 0' }
+            Write-AtomicJson $settingsPath @{model=$modelPath;cpu=[bool]$cpuMode}
             New-Item $RunKey -Force | Out-Null
             New-ItemProperty $RunKey -Name BeamIME -Value "`"$InstallDir\beamd.exe`" $args" -PropertyType String -Force | Out-Null
             Invoke-Process (Join-Path $InstallDir 'beamd.exe') $args $false 0

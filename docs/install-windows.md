@@ -25,6 +25,14 @@
 日志中的 `restarting on the CPU` 表示 GPU 推理失败后已改用 CPU。
 无 GPU 驱动时 CPU 后端仍可加载；CPU 下可把 `beam/beam_ms` 设为 0，减少候选等待。
 
+使用已有兼容 GGUF，或强制 CPU（升级时保留此选择）：
+
+```powershell
+& "$env:LOCALAPPDATA\Programs\BeamIME\beam-setup.ps1" -Action Install -Model 'D:\Models\custom.gguf' -Cpu
+```
+
+不更换模型时省略 `-Model`。旧版 `%LOCALAPPDATA%\beam-ime\models\beam.gguf` 也会自动沿用。
+
 ## 升级和卸载
 
 运行新版安装器升级，已下载的相同模型会复用。不要手动混用不同小狼毫版本的 DLL。

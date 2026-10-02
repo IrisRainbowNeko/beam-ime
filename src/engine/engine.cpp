@@ -9,6 +9,10 @@
 #include <cstdio>
 #include <filesystem>
 #include <thread>
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace beam {
 
@@ -44,18 +48,29 @@ struct Engine::Impl {
     std::vector<float> first_logits;       // distribution of the first result token
 
     explicit Impl(const EngineOptions & o) : options(o) {
-        name = std::filesystem::path(o.model_path).filename().string();
+        name = std::filesystem::u8path(o.model_path).filename().u8string();
         llama_log_set([](ggml_log_level level, const char * text, void *) {
             if (level >= GGML_LOG_LEVEL_ERROR) fputs(text, stderr);
         }, nullptr);
         if (!o.backend_dir.empty()) {
             if (o.gpu_layers == 0) {
 #ifdef _WIN32
-                auto cpu = std::filesystem::path(o.backend_dir) / "ggml-cpu.dll";
+                auto cpu = std::filesystem::u8path(o.backend_dir) / "ggml-cpu.dll";
+                // The pinned ggml path loader converts narrow Windows paths using the ANSI code page.
+                // Use the wide loader here so CPU-only startup also works under Unicode profiles.
+                HMODULE module = LoadLibraryW(cpu.c_str());
+                if (module) {
+                    auto init = reinterpret_cast<ggml_backend_reg_t (*)()>(GetProcAddress(module, "ggml_backend_init"));
+                    if (init) {
+                        auto reg = init();
+                        if (reg) ggml_backend_register(reg);
+                    }
+                    // Backends can own worker threads; retain the module until process exit.
+                }
 #else
                 auto cpu = std::filesystem::path(o.backend_dir) / "libggml-cpu.so";
+                ggml_backend_load(cpu.u8string().c_str());
 #endif
-                ggml_backend_load(cpu.string().c_str());
             } else ggml_backend_load_all_from_path(o.backend_dir.c_str());
         } else ggml_backend_load_all();
         auto mp = llama_model_default_params();

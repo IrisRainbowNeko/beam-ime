@@ -14,7 +14,7 @@ python tools/package_linux.py --format arch --model models/beam-0.6b-q8_0.gguf
 ## Ubuntu 24.04
 
 ```sh
-sudo apt install build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libvulkan-dev glslc spirv-headers python3-yaml python3-pip
+sudo apt install build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libx11-dev libvulkan-dev glslc spirv-headers python3-yaml python3-pip
 python3 -m pip install --break-system-packages pypinyin==0.55.0
 bash tools/build.sh release
 python3 tools/package_linux.py --format deb --model models/beam-0.6b-q8_0.gguf

@@ -10,7 +10,7 @@ import subprocess
 import urllib.request
 import zipfile
 from fetch_rime_data import stage as stage_rime
-from beamlib.model import read_manifest, verify
+from beamlib.model import read_manifest, verify, sha256
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -72,6 +72,11 @@ def main():
         if offline: command.append(prefix+"DOFFLINE")
         command.append(path(ROOT/"packaging/windows/installer.nsi"))
         subprocess.run(command, check=True, env={**os.environ, "WINEDEBUG": "-all"})
+        info = {"version": version, "platform": "windows-x64", "artifact": artifact.name,
+                "sha256": sha256(artifact), "dependencies": lock,
+                "sourceCommit": subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                "compiler": subprocess.check_output(['x86_64-w64-mingw32-g++', '--version'], text=True).splitlines()[0]}
+        (dist / (artifact.name + '.build.json')).write_text(json.dumps(info, indent=2) + '\n')
         print(artifact)
     build(False)
     if not args.light_only:
@@ -82,6 +87,11 @@ def main():
         fetch(lock["weasel"]["url"], weasel, lock["weasel"]["sha256"])
         shutil.copy2(weasel, stage/"payload/weasel-installer.exe")
         build(True)
+    symbols = ROOT / 'build/win/symbols'
+    if symbols.exists():
+        with zipfile.ZipFile(dist/f'Beam-{version}-windows-x64-symbols.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+            for file in sorted(symbols.glob('*.debug')):
+                archive.write(file, file.name)
 
 
 if __name__ == "__main__": main()
