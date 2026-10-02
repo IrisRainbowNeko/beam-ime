@@ -1,0 +1,61 @@
+name: Release packages
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag
+        required: true
+        default: v0.1.0-beta.1
+permissions:
+  contents: read
+jobs:
+  ubuntu:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {ref: '${{ inputs.tag || github.ref_name }}'}
+      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libvulkan-dev glslc spirv-headers python3-yaml
+      - run: python3 -m pip install pypinyin==0.55.0
+      - run: bash tools/build.sh release
+        env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
+      - name: Download released model
+        run: gh release download "$TAG" --pattern beam-0.6b-q8_0.gguf --dir models
+        env: {GH_TOKEN: '${{ github.token }}', TAG: '${{ inputs.tag || github.ref_name }}'}
+      - run: python3 tools/package_linux.py --format deb --model models/beam-0.6b-q8_0.gguf
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: ubuntu-release, path: 'dist/*'}
+  arch-windows:
+    runs-on: ubuntu-24.04
+    container: archlinux:base
+    steps:
+      - run: pacman -Syu --noconfirm base-devel cmake ninja git boost nlohmann-json librime fcitx5-rime glog vulkan-headers vulkan-icd-loader shaderc spirv-headers python python-yaml python-pypinyin mingw-w64-gcc nsis 7zip github-cli
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {ref: '${{ inputs.tag || github.ref_name }}'}
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: bash tools/build.sh release
+        env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
+      - run: gh release download "$TAG" --pattern beam-0.6b-q8_0.gguf --dir models
+        env: {GH_TOKEN: '${{ github.token }}', TAG: '${{ inputs.tag || github.ref_name }}'}
+      - run: python tools/package_linux.py --format arch --model models/beam-0.6b-q8_0.gguf
+      - run: bash packaging/windows/build.sh deps rime beamd
+        env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
+      - run: python tools/collect_licenses.py && python tools/package_windows.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: arch-windows-release, path: 'dist/*'}
+  draft:
+    needs: [ubuntu, arch-windows]
+    runs-on: ubuntu-24.04
+    permissions: {contents: write}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with: {ref: '${{ inputs.tag || github.ref_name }}'}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with: {path: dist, merge-multiple: true}
+      - run: python3 tools/checksums.py dist
+      - name: Upload packages
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --prerelease --title "Beam $TAG" --notes-file docs/release-notes.md
+          gh release upload "$TAG" dist/* --clobber
+        env: {GH_TOKEN: '${{ github.token }}', TAG: '${{ inputs.tag || github.ref_name }}'}

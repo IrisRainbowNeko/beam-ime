@@ -1,0 +1,16 @@
+# Cross-compile for 64-bit Windows with MinGW-w64 (e.g. Arch's mingw-w64-gcc).
+set(CMAKE_SYSTEM_NAME Windows)
+set(CMAKE_SYSTEM_PROCESSOR x86_64)
+set(triple x86_64-w64-mingw32)
+set(CMAKE_C_COMPILER ${triple}-gcc)
+set(CMAKE_CXX_COMPILER ${triple}-g++)
+set(CMAKE_RC_COMPILER ${triple}-windres)
+set(CMAKE_FIND_ROOT_PATH /usr/${triple} ${BEAM_WIN_PREFIX})
+set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE ONLY)
+# Ship self-contained binaries: no libstdc++/libgcc/winpthread DLLs next to them.
+set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++")
+set(CMAKE_SHARED_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++")
+set(CMAKE_MODULE_LINKER_FLAGS_INIT "-static -static-libgcc -static-libstdc++")

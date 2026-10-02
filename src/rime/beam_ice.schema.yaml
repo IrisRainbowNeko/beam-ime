@@ -1,0 +1,36 @@
+# Beam 雾凇: rime-ice (雾凇拼音) with keys-LLM candidates from the local beamd service on top.
+# Beam's whole-input guesses come first; rime-ice's own candidates follow and are the only ones
+# shown when beamd is not running. The 智能/经典 switch turns Beam off without changing schema.
+
+__include: rime_ice.schema:/
+
+schema:
+  schema_id: beam_ice
+  name: Beam 雾凇
+  version: "0.1"
+  author:
+    - Beam
+    - Dvel (rime-ice)
+  description: |
+    雾凇拼音 + Beam 按键语言模型（本地 beamd）
+  dependencies:
+    - melt_eng
+    - radical_pinyin
+
+__patch:
+  - engine/processors/@before 0: beam_processor
+  - engine/translators/@before 0: beam_translator
+  - switches/@next: { name: beam_off, states: [ 智能, 经典 ] }
+  # rime-ice's long_word_filter lifts 2 longer dictionary words to position 4, which pushed
+  # Beam's 4th and 5th candidates down; lift them to just after Beam's candidates instead.
+  - long_word_filter/idx: 6
+  # Keep the user's own rime-ice tweaks (page size, bindings, ...).
+  - rime_ice.custom:/patch?
+  - beam_ice.custom:/patch?
+
+beam:
+  timeout_ms: 400   # whole request; slower replies fall back to rime-ice for that keystroke
+  beam_ms: 100      # beam search budget inside beamd; 0 = Top-1 only
+  candidates: 5
+  context: true     # send what was typed before in this window (stays on this machine)
+  max_letters: 40

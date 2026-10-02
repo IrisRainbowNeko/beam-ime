@@ -1,0 +1,16 @@
+/build/
+/dist/
+/models/*.gguf
+/data/
+/runs/
+*.gguf
+*.safetensors
+*.onnx
+*.sqlite*
+*.part
+*.env
+.env
+__pycache__/
+*.pyc
+.venv/
+CMakeUserPresets.json

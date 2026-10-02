@@ -1,0 +1,7 @@
+name: Feature request
+description: Suggest an improvement
+body:
+  - type: textarea
+    id: need
+    attributes: {label: "What would you like to do?"}
+    validations: {required: true}

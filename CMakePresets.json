@@ -1,0 +1,10 @@
+{
+  "version": 5,
+  "configurePresets": [
+    {"name": "release", "generator": "Ninja", "binaryDir": "${sourceDir}/build/release", "cacheVariables": {"CMAKE_BUILD_TYPE": "Release", "CMAKE_INSTALL_PREFIX": "/usr", "CMAKE_INSTALL_LIBDIR": "lib", "BEAM_NATIVE": "OFF"}},
+    {"name": "cpu", "inherits": "release", "binaryDir": "${sourceDir}/build/cpu", "cacheVariables": {"BEAM_VULKAN": "OFF"}},
+    {"name": "tests", "generator": "Ninja", "binaryDir": "${sourceDir}/build/tests", "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug", "BEAM_BUILD_DAEMON": "OFF", "BEAM_BUILD_RIME_PLUGIN": "OFF", "BUILD_TESTING": "ON"}}
+  ],
+  "buildPresets": [{"name": "release", "configurePreset": "release"}, {"name": "cpu", "configurePreset": "cpu"}, {"name": "tests", "configurePreset": "tests"}],
+  "testPresets": [{"name": "tests", "configurePreset": "tests", "output": {"outputOnFailure": true}}]
+}

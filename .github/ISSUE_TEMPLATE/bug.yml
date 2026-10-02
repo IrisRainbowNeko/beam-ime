@@ -1,0 +1,14 @@
+name: Bug report
+description: Installation, input, or model-service problem
+body:
+  - type: input
+    id: version
+    attributes: {label: "Beam version and operating system"}
+    validations: {required: true}
+  - type: textarea
+    id: steps
+    attributes: {label: "Steps to reproduce", description: "Use a short invented input example."}
+    validations: {required: true}
+  - type: textarea
+    id: diagnostic
+    attributes: {label: "Diagnostic output", description: "beamctl doctor or the Windows Doctor command. Remove personal paths if present.", render: json}

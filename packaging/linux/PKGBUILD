@@ -1,0 +1,21 @@
+pkgname=beam-ime
+pkgver=0.1.0beta1
+pkgrel=1
+pkgdesc='Local keys-conditioned language model input method'
+arch=('x86_64')
+url='https://github.com/IrisRainbowNeko/beam-ime'
+license=('Apache-2.0')
+depends=('fcitx5-rime' 'librime' 'python' 'python-yaml' 'gcc-libs')
+makedepends=('cmake' 'ninja' 'git' 'boost' 'nlohmann-json' 'vulkan-headers' 'vulkan-icd-loader' 'shaderc' 'spirv-headers' 'python-pypinyin')
+optdepends=('vulkan-radeon: AMD GPU acceleration' 'vulkan-intel: Intel GPU acceleration')
+source=("beam-ime::git+https://github.com/IrisRainbowNeko/beam-ime.git#tag=v0.1.0-beta.1")
+sha256sums=('SKIP')
+build() {
+  cmake -S "$srcdir/beam-ime" -B "$srcdir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib
+  cmake --build "$srcdir/build"
+}
+check() { ctest --test-dir "$srcdir/build" --output-on-failure; }
+package() {
+  DESTDIR="$pkgdir" cmake --install "$srcdir/build"
+  python "$srcdir/beam-ime/tools/fetch_rime_data.py" "$pkgdir/usr/share/beam-ime/rime-data"
+}

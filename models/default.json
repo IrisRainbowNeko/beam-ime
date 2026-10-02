@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "beam-0.6b",
+  "version": "0.1.0-beta.1",
+  "filename": "beam-0.6b-q8_0.gguf",
+  "baseModel": "Qwen/Qwen3-0.6B-Base",
+  "promptVersion": "keys_llm_v1",
+  "quantization": "Q8_0",
+  "tiedEmbeddings": true,
+  "size": 639446720,
+  "sha256": "35eccd83d31b123e41313fe59bbcd0fefa2b929865fa66dff8ab77187203309c",
+  "license": "Apache-2.0",
+  "url": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.1/beam-0.6b-q8_0.gguf"
+}

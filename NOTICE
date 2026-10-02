@@ -1,0 +1,6 @@
+Beam IME
+Copyright 2026 Beam contributors
+
+The initial C++ engine, Rime integration and model tools were extracted from
+the Beam research repository, revision 81ea804, by its maintainer.
+Third-party components retain their own copyright and license notices.
