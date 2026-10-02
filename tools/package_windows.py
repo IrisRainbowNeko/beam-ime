@@ -67,7 +67,8 @@ def main():
     environment = {**os.environ, 'WINEDEBUG': '-all'}
     if wine_prefix:
         environment['WINEPREFIX'] = wine_prefix.name
-        environment['WINEDLLOVERRIDES'] = 'winemenubuilder.exe=d'
+        environment['HOME'] = wine_prefix.name
+        environment['WINEDLLOVERRIDES'] = 'winemenubuilder.exe=d;mscoree,mshtml=d'
     def build(offline):
         artifact = dist/f"Beam-{version}-windows-x64-{'offline' if offline else 'setup'}.exe"
         def path(p): return "Z:" + str(p.resolve()).replace("/", "\\") if wine else str(p.resolve())
@@ -85,6 +86,8 @@ def main():
         (dist / (artifact.name + '.build.json')).write_text(json.dumps(info, indent=2) + '\n')
         print(artifact)
     try:
+        if wine_prefix:
+            subprocess.run(['wineboot', '-u'], env=environment, check=True, timeout=120)
         build(False)
         if not args.light_only:
             spec = read_manifest(ROOT/"models/default.json")
