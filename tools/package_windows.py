@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 import urllib.request
 import zipfile
 from fetch_rime_data import stage as stage_rime
@@ -62,6 +63,11 @@ def main():
         maker = str(downloads/f"nsis-{nsis['version']}/makensis.exe")
     dist = ROOT/"dist"
     dist.mkdir(exist_ok=True)
+    wine_prefix = tempfile.TemporaryDirectory(prefix='beam-nsis-') if wine else None
+    environment = {**os.environ, 'WINEDEBUG': '-all'}
+    if wine_prefix:
+        environment['WINEPREFIX'] = wine_prefix.name
+        environment['WINEDLLOVERRIDES'] = 'winemenubuilder.exe=d'
     def build(offline):
         artifact = dist/f"Beam-{version}-windows-x64-{'offline' if offline else 'setup'}.exe"
         def path(p): return "Z:" + str(p.resolve()).replace("/", "\\") if wine else str(p.resolve())
@@ -71,27 +77,33 @@ def main():
             prefix+f"DSETUP_FLAGS={' ' if offline else '-Download'}"]
         if offline: command.append(prefix+"DOFFLINE")
         command.append(path(ROOT/"packaging/windows/installer.nsi"))
-        subprocess.run(command, check=True, env={**os.environ, "WINEDEBUG": "-all"})
+        subprocess.run(command, check=True, env=environment)
         info = {"version": version, "platform": "windows-x64", "artifact": artifact.name,
                 "sha256": sha256(artifact), "dependencies": lock,
                 "sourceCommit": subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
                 "compiler": subprocess.check_output(['x86_64-w64-mingw32-g++', '--version'], text=True).splitlines()[0]}
         (dist / (artifact.name + '.build.json')).write_text(json.dumps(info, indent=2) + '\n')
         print(artifact)
-    build(False)
-    if not args.light_only:
-        spec = read_manifest(ROOT/"models/default.json")
-        verify(args.model, spec)
-        shutil.copy2(args.model, stage/"models"/spec["filename"])
-        weasel = downloads/"weasel-0.17.4.0-installer.exe"
-        fetch(lock["weasel"]["url"], weasel, lock["weasel"]["sha256"])
-        shutil.copy2(weasel, stage/"payload/weasel-installer.exe")
-        build(True)
-    symbols = ROOT / 'build/win/symbols'
-    if symbols.exists():
-        with zipfile.ZipFile(dist/f'Beam-{version}-windows-x64-symbols.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
-            for file in sorted(symbols.glob('*.debug')):
-                archive.write(file, file.name)
+    try:
+        build(False)
+        if not args.light_only:
+            spec = read_manifest(ROOT/"models/default.json")
+            verify(args.model, spec)
+            shutil.copy2(args.model, stage/"models"/spec["filename"])
+            weasel = downloads/"weasel-0.17.4.0-installer.exe"
+            fetch(lock["weasel"]["url"], weasel, lock["weasel"]["sha256"])
+            shutil.copy2(weasel, stage/"payload/weasel-installer.exe")
+            build(True)
+        symbols = ROOT / 'build/win/symbols'
+        if symbols.exists():
+            with zipfile.ZipFile(dist/f'Beam-{version}-windows-x64-symbols.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
+                for file in sorted(symbols.glob('*.debug')):
+                    archive.write(file, file.name)
+    finally:
+        if wine_prefix:
+            subprocess.run(['wineserver', '-k'], env=environment, check=False)
+            subprocess.run(['wineserver', '-w'], env=environment, check=False, timeout=30)
+            wine_prefix.cleanup()
 
 
 if __name__ == "__main__": main()
