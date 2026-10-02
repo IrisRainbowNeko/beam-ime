@@ -6,12 +6,16 @@ arch=('x86_64')
 url='https://github.com/IrisRainbowNeko/beam-ime'
 license=('Apache-2.0')
 depends=('fcitx5-rime' 'librime' 'python' 'python-yaml' 'gcc-libs')
-makedepends=('cmake' 'ninja' 'git' 'boost' 'nlohmann-json' 'vulkan-headers' 'vulkan-icd-loader' 'shaderc' 'spirv-headers' 'python-pypinyin')
+makedepends=('cmake' 'ninja' 'git' 'boost' 'nlohmann-json' 'vulkan-headers' 'vulkan-icd-loader' 'shaderc' 'spirv-headers' 'python-pip')
 optdepends=('vulkan-radeon: AMD GPU acceleration' 'vulkan-intel: Intel GPU acceleration')
 source=("beam-ime::git+https://github.com/IrisRainbowNeko/beam-ime.git#tag=v0.1.0-beta.1")
 sha256sums=('SKIP')
+prepare() {
+  python -m venv --system-site-packages "$srcdir/test-env"
+  "$srcdir/test-env/bin/python" -m pip install pypinyin==0.55.0
+}
 build() {
-  cmake -S "$srcdir/beam-ime" -B "$srcdir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib
+  cmake -S "$srcdir/beam-ime" -B "$srcdir/build" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr -DCMAKE_INSTALL_LIBDIR=lib -DPython3_EXECUTABLE="$srcdir/test-env/bin/python"
   cmake --build "$srcdir/build"
 }
 check() { ctest --test-dir "$srcdir/build" --output-on-failure; }
