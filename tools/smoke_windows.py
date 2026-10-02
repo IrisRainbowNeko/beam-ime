@@ -11,10 +11,6 @@ import tempfile
 import time
 
 
-def windows_path(path):
-    return 'Z:' + str(path.resolve()).replace('/', '\\')
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--bin', type=Path, default=Path('build/win/out'))
@@ -25,7 +21,8 @@ def main():
         binary = root / '\u6d4b\u8bd5 install'
         binary.mkdir()
         for source in args.bin.iterdir():
-            if source.name in ('beamd.exe', 'ggml-base.dll', 'ggml.dll', 'ggml-cpu.dll', 'llama.dll'):
+            if source.name in ('beamd.exe', 'ggml-base.dll', 'ggml.dll', 'ggml-cpu.dll', 'llama.dll',
+                               'rime.dll', 'beam-rime-host-test.exe'):
                 shutil.copy2(source, binary / source.name)
         model = root / '\u6a21\u578b test.gguf'
         model.symlink_to(args.model.resolve())
@@ -35,13 +32,18 @@ def main():
         try:
             subprocess.run(['wineboot', '-u'], env=env, check=True, timeout=90,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            host_test = binary / 'beam-rime-host-test.exe'
+            if host_test.exists():
+                subprocess.run(['wine', str(host_test)], env=env, cwd=binary, check=True, timeout=30)
+                print('Unicode GUI-host Rime initialization passed.')
             with (root / 'daemon.log').open('w') as log:
                 process = subprocess.Popen(['wine', str(binary / 'beamd.exe'), '--model',
                     # Preserve the Unicode symlink name instead of resolving it.
                     'Z:' + str(model).replace('/', '\\'), '--ngl', '0', '--threads', '2'],
                     env=env, stdout=log, stderr=log)
                 endpoint = None
-                for _ in range(600):
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
                     if process.poll() is not None:
                         raise RuntimeError((root / 'daemon.log').read_text(errors='replace'))
                     files = list((root / 'prefix/drive_c/users').glob('*/AppData/Local/beam-ime/beamd.endpoint'))

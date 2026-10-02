@@ -29,12 +29,32 @@ def bundle_metadata(info):
     return info
 
 
+def offline_bundle(artifact, model, platform):
+    spec = read_manifest(ROOT / 'models/default.json')
+    verify(model, spec)
+    version = (ROOT / 'VERSION').read_text().strip()
+    bundle = ROOT / 'dist' / f'beam-ime-{version}-{platform}-x86_64-offline.tar'
+    bundle.parent.mkdir(exist_ok=True)
+    with tarfile.open(bundle, 'w') as archive:
+        for source, name in ((artifact, artifact.name), (model, spec['filename']),
+                             (ROOT / 'packaging/linux/install-offline.sh', 'install.sh'),
+                             (ROOT / 'docs/install-linux.md', 'README.md')):
+            archive.add(source, arcname=name, filter=bundle_metadata)
+    return bundle
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=("deb", "arch"), required=True)
     parser.add_argument("--build", type=Path, default=ROOT / "build/release")
     parser.add_argument("--model", type=Path, help="also make the offline bundle")
+    parser.add_argument('--existing-package', type=Path, help='bundle an already built distribution package')
     args = parser.parse_args()
+    if args.existing_package:
+        if not args.model:
+            parser.error('--existing-package requires --model')
+        print(offline_bundle(args.existing_package, args.model, args.format))
+        return
     version = (ROOT / "VERSION").read_text().strip()
     # Stage on the native temporary filesystem, including when the checkout is on NTFS.
     temporary = tempfile.TemporaryDirectory(prefix='beam-package-')
@@ -73,14 +93,7 @@ def main():
         normalize_permissions(stage)
         subprocess.run(["tar", "--zstd", "--owner=0", "--group=0", "-cf", str(artifact), "-C", str(stage), ".PKGINFO", "usr"], check=True)
     if args.model:
-        spec = read_manifest(ROOT / "models/default.json")
-        verify(args.model, spec)
-        bundle = dist / f"beam-ime-{version}-{args.format}-x86_64-offline.tar"
-        with tarfile.open(bundle, "w") as archive:
-            archive.add(artifact, arcname=artifact.name, filter=bundle_metadata)
-            archive.add(args.model, arcname=spec["filename"], filter=bundle_metadata)
-            archive.add(ROOT / "packaging/linux/install-offline.sh", arcname="install.sh", filter=bundle_metadata)
-            archive.add(ROOT / "docs/install-linux.md", arcname="README.md", filter=bundle_metadata)
+        offline_bundle(artifact, args.model, args.format)
     manifest = {"version": version, "platform": args.format, "rimeAbi": (args.build / "rime-abi.txt").read_text().strip(),
                 "artifact": artifact.name, "sha256": sha256(artifact),
                 "sourceCommit": subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),

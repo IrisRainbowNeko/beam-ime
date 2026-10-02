@@ -29,5 +29,6 @@ jobs:
       - run: bash tools/build.sh release
         env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
       - run: python3 tools/package_linux.py --format deb
+      - run: sudo apt-get install -y ./dist/*.deb && beamd --version && beamctl doctor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: ubuntu-package, path: 'dist/*'}

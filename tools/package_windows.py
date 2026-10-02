@@ -37,7 +37,7 @@ def main():
     (stage/"models").mkdir()
     output = ROOT/"build/win/out"
     for file in output.glob("*"):
-        if file.suffix.lower() in (".dll", ".exe"):
+        if file.suffix.lower() in (".dll", ".exe") and not file.name.endswith('-test.exe'):
             shutil.copy2(file, stage/("payload/rime.dll" if file.name == "rime.dll" else file.name))
     if not (stage/"beamd.exe").exists() or not (stage/"payload/rime.dll").exists():
         raise ValueError("build the rime and beamd targets first")

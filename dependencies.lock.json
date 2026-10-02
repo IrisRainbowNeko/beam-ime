@@ -3,6 +3,10 @@
   "nlohmann-json": {"revision": "55f93686c01528224f448c19128836e7df245f72", "source": "https://github.com/nlohmann/json"},
   "windows-librime": {"version": "1.13.1", "revision": "1c23358157934bd6e6d6981f0c0164f05393b497", "source": "https://github.com/rime/librime"},
   "librime-lua": {"revision": "6f30968058a3ca83c47949308ef0ddc51a11a264", "source": "https://github.com/hchunhui/librime-lua"},
+  "lua-thirdparty": {"revision": "9e5bb71db1544913f8005dadc3df8439c00d08b7", "source": "https://github.com/hchunhui/librime-lua"},
+  "Vulkan-Headers": {"revision": "2cd90f9d20df57eac214c148f3aed885372ddcfe", "source": "https://github.com/KhronosGroup/Vulkan-Headers"},
+  "Vulkan-Loader": {"revision": "da8d2caad9341ca8c5a7c3deba217d7da50a7c24", "source": "https://github.com/KhronosGroup/Vulkan-Loader"},
+  "SPIRV-Headers": {"revision": "2a611a970fdbc41ac2e3e328802aed9985352dca", "source": "https://github.com/KhronosGroup/SPIRV-Headers"},
   "rime-ice": {"revision": "6810e8916d160498620a16fef2135956fecbd485", "sha256": "5e83281482af949fef9e34fb034432f874ec47d537a11f7210cce2965e35960c", "url": "https://codeload.github.com/iDvel/rime-ice/tar.gz/6810e8916d160498620a16fef2135956fecbd485"},
   "weasel": {"version": "0.17.4.0", "sha256": "cf509534a8f5f8af9c98ed7cbb8f135439f145a8cbe7e50ede42bb5b5ab45c29", "url": "https://github.com/rime/weasel/releases/download/0.17.4/weasel-0.17.4.0-installer.exe"},
   "nsis": {"version": "3.11", "sha256": "c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1"}

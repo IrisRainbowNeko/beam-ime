@@ -43,11 +43,23 @@ python3 tools/package_windows.py --model models/beam-0.6b-q8_0.gguf
 ```
 
 输出在 `dist/`，含轻量版和离线版。NSIS 可使用系统 `makensis`，否则自动下载固定版本并通过 Wine 运行。
-普通重新构建保留缓存；删除 `build/win/b` 可以重新配置，删除 `build/win/prefix` 可以完整重建依赖。
-glog 每次重新配置，确保 `HAVE___ARGV=0` 被应用。
+普通重新构建保留缓存；依赖会重新配置，由 Ninja 判断需要重编译的文件。
+删除 `build/win/b` 和 `build/win/prefix` 可以完整重建依赖。glog 每次应用 `HAVE___ARGV=0`。
 
-Windows 本机开发可在 MSYS2 MINGW64 shell 安装 gcc、cmake、ninja、nlohmann-json、Vulkan SDK 后，
-直接使用根 CMake 构建 `beamd`。合并小狼毫和完整安装包使用上面的 Linux 交叉构建脚本。
+Windows 本机开发，在 MSYS2 MINGW64 shell 执行：
+
+```sh
+pacman -S --needed git mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake \
+  mingw-w64-x86_64-ninja mingw-w64-x86_64-nlohmann-json \
+  mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-vulkan-loader \
+  mingw-w64-x86_64-shaderc mingw-w64-x86_64-spirv-headers
+cmake -S . -B build/msys2 -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+cmake --build build/msys2 --parallel 4
+./build/msys2/bin/beamd.exe --model 'D:/Models/beam-0.6b-q8_0.gguf' --ngl 0
+```
+
+这个开发构建在 MINGW64 shell 中使用其运行库，不要只拷贝 exe 给其他用户。
+合并小狼毫和完整安装包使用上面的 Linux 交叉构建脚本。
 首发不支持 MSVC。
 
 ## 测试

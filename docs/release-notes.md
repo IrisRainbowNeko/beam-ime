@@ -9,3 +9,6 @@
 
 安装、配置、编译和排错文档在仓库的 docs 目录。Windows 安装器暂未做代码签名。
 Linux 安装后运行 beamctl setup 并重新部署 Rime。
+
+已验证 Arch 本机构建、Ubuntu 24.04 CI 构建、核心与安装恢复测试、隔离 Rime 输入与兜底，
+以及 Windows 的 Unicode GUI 宿主和无 Vulkan CPU 推理。尚未完成真实 Windows 11 桌面端到端验证。

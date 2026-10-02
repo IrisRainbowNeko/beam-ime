@@ -19,4 +19,6 @@ cp "$W/b/librime/lib/rime.dll" "$W/out/rime.dll" 2>/dev/null || cp "$W"/b/librim
 mkdir -p "$W/symbols"
 ${TRIPLE}-objcopy --only-keep-debug "$W/out/rime.dll" "$W/symbols/rime.dll.debug"
 ${TRIPLE}-strip "$W/out/rime.dll"
+${TRIPLE}-g++ -std=c++17 -municode -mwindows -static -I"$S/librime/src" \
+  "$root/tests/windows-rime-host.cc" -o "$W/out/beam-rime-host-test.exe"
 echo "built out/rime.dll"
