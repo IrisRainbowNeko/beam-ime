@@ -6,7 +6,7 @@ C++17、CMake 3.24+、Ninja。依赖版本见 `dependencies.lock.json`。
 ## Arch
 
 ```sh
-sudo pacman -S --needed base-devel cmake ninja git boost nlohmann-json librime fcitx5-rime glog vulkan-headers vulkan-icd-loader shaderc spirv-headers python python-yaml python-pip
+sudo pacman -S --needed base-devel cmake ninja git boost nlohmann-json librime fcitx5-rime vulkan-headers vulkan-icd-loader shaderc spirv-headers python python-yaml python-pip
 python -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install pypinyin==0.55.0
