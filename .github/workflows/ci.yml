@@ -32,3 +32,17 @@ jobs:
       - run: sudo apt-get install -y ./dist/*.deb && beamd --version && beamctl doctor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: ubuntu-package, path: 'dist/*'}
+  fedora:
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - run: dnf -y --setopt=install_weak_deps=False install gcc-c++ cmake ninja-build git pkgconf-pkg-config boost-devel json-devel librime-devel librime-lua fcitx5-rime glog-devel libX11-devel vulkan-headers vulkan-loader-devel glslc spirv-headers-devel python3 python3-pyyaml python3-pip rpm-build redhat-rpm-config
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: python3 -m pip install --break-system-packages pypinyin==0.55.0
+      - run: bash tools/build.sh release -DCMAKE_INSTALL_LIBDIR=lib64
+        env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
+      - run: python3 tools/package_linux.py --format rpm
+      - run: dnf -y --setopt=install_weak_deps=False install ./dist/*.rpm && beamd --version && beamctl doctor
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with: {name: fedora-package, path: 'dist/*'}

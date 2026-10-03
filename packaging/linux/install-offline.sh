@@ -3,6 +3,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 if [ -f /etc/arch-release ]; then
   sudo pacman -U -- ./*.pkg.tar.zst
+elif [ -f /etc/fedora-release ]; then
+  sudo dnf install ./*.rpm
 else
   sudo apt install -- ./*.deb
 fi

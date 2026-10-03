@@ -7,7 +7,7 @@
 
 ```sh
 sudo pacman -S --needed fcitx5 fcitx5-rime python python-yaml
-sudo pacman -U ./beam-ime-0.1.0-beta.1-arch-x86_64.pkg.tar.zst
+sudo pacman -U ./beam-ime-0.1.0-beta.2-arch-x86_64.pkg.tar.zst
 ```
 
 Arch 包匹配构建时的 librime。系统滚动更新导致版本不匹配时，使用
@@ -18,10 +18,20 @@ Arch 包匹配构建时的 librime。系统滚动更新导致版本不匹配时�
 ```sh
 sudo apt update
 sudo apt install fcitx5 fcitx5-rime librime-plugin-lua python3-yaml
-sudo apt install ./beam-ime-0.1.0-beta.1-ubuntu24.04-amd64.deb
+sudo apt install ./beam-ime-0.1.0-beta.2-ubuntu24.04-amd64.deb
 ```
 
-不要将 Arch 的插件复制到 Ubuntu。插件需要与本系统 librime 的 C++ ABI 匹配。
+## Fedora 44
+
+```sh
+sudo dnf install fcitx5 fcitx5-rime librime-lua python3-pyyaml
+sudo dnf install ./beam-ime-0.1.0-beta.2-fedora44-x86_64.rpm
+```
+
+Fedora Workstation 默认的 IBus 与 Beam 使用的 Fcitx5 是不同前端，需要先在桌面环境启用 Fcitx5。
+RPM 会安装匹配的 librime 依赖，程序运行库位于 `/usr/lib64/beam-ime`。
+
+不要混用不同发行版的插件。插件需要与本系统 librime 的 C++ ABI 匹配。
 
 ## 模型和首次启用
 
@@ -50,7 +60,8 @@ beamctl setup
 
 升级程序包后运行 `beamctl setup`，模型不需要重复下载。librime 升级后需要匹配的新包或重编译。
 
-先运行 `beamctl disable`，再用 `pacman -R beam-ime` 或 `apt remove beam-ime` 卸载程序。
+先运行 `beamctl disable`，再按发行版使用 `sudo pacman -R beam-ime`、
+`sudo apt remove beam-ime` 或 `sudo dnf remove beam-ime` 卸载程序。
 随后重新部署 Rime。模型、用户词库和备份保留；被用户改过的资源文件也会保留。
 用户配置在首次修改前保存为 `default.custom.yaml.beam-backup`。
 

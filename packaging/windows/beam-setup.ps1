@@ -91,7 +91,7 @@ function Update-SchemaList($Path, [bool]$Enable) {
 try {
     if ($Action -eq 'Doctor') {
         $endpoint = Join-Path $State 'beamd.endpoint'
-        $status = @{version='0.1.0-beta.1'; weaselInstalled=[bool](Find-Weasel); running=[bool](Get-Process beamd -ErrorAction SilentlyContinue)}
+        $status = @{version='0.1.0-beta.2'; weaselInstalled=[bool](Find-Weasel); running=[bool](Get-Process beamd -ErrorAction SilentlyContinue)}
         if (Test-Path $endpoint) {
             try {
                 $info = Get-Content -Raw $endpoint | ConvertFrom-Json

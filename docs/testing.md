@@ -1,6 +1,6 @@
 # 测试记录
 
-版本：0.1.0-beta.1。测试随发行工程持续补充，下面区分实际运行与尚未覆盖的环境。
+版本：0.1.0-beta.2。测试随发行工程持续补充，下面区分实际运行与尚未覆盖的环境。
 
 ## 本机自动验证
 
@@ -9,6 +9,7 @@
 - 真实模型 CPU 集成：错误请求后服务继续运行，生成候选，上下文切换。
 - PowerShell：重复安装、恢复原文件、保留用户修改、复制失败回滚、安装脚本语法。
 - Arch 构建：独立 C++ daemon、动态 CPU / Vulkan 后端及 librime 插件。
+- Fedora 44 隔离环境：原生构建、RPM 安装、`lib64` 下的 CPU daemon、真实模型回归，以及安装后 Rime 插件的候选、上屏和停服务后的词典兜底。
 - 隔离 Rime 用户目录：方案部署、候选、上屏，以及停止 daemon 后的雾凇输入。
 - Windows Wine：中文与空格程序/模型路径，不提供 Vulkan DLL 的 CPU 启动与生成。
 - Windows Unicode GUI 宿主：合并 Rime DLL 的日志初始化，覆盖 glog 的 `__argv` 修复。
@@ -17,7 +18,7 @@
 真实模型用本次发布的 GGUF，使用隔离 socket，不替换桌面正在运行的输入法。
 这些检查验证工程行为，不是大规模准确率评测。
 
-## 示例测量
+## 首发版本示例测量
 
 2026-10-02，AMD Ryzen 7 8845H，Arch Linux，CPU 后端，8 推理线程，Q8_0 发布模型。
 无上下文、每项一次调用；构建任务同时运行，数值仅用于说明量级，不是稳定性或准确率基准。
@@ -41,5 +42,6 @@ python tools/smoke_windows.py --model models/beam-0.6b-q8_0.gguf
 ## 平台边界
 
 Ubuntu 24.04 的编译和包生成由 GitHub Actions 在对应系统完成。
+Fedora 44 的 RPM、CPU 推理和 Rime 测试在隔离环境中完成，尚未验证真实 GNOME / Plasma 桌面的交互流程。
 Windows 的交叉构建、PowerShell 测试和 Wine 检查不能等同于真实 Windows 11 桌面验证。
 Beta 用户可按安装教程反馈真实桌面的候选、上屏和宿主兼容问题。

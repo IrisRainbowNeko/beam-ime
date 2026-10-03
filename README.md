@@ -7,13 +7,15 @@ Beam 在本机运行 0.6B 语言模型，通过 Rime 接入桌面输入法；雾
 
 ## 下载和安装
 
-当前版本：**0.1.0-beta.1**。面向 x86_64 的 Arch Linux、Ubuntu 24.04 和 Windows 11。
+当前版本：**0.1.0-beta.2**。面向 x86_64 的 Arch Linux、Ubuntu 24.04、Fedora 44 和 Windows 11。
+Linux 使用 Fcitx5-Rime，Windows 使用小狼毫 Weasel 0.17.4。
 
-| 系统 | 安装包 | 教程 |
-|---|---|---|
-| Arch Linux | `.pkg.tar.zst`，另有 PKGBUILD | [Linux 安装](docs/install-linux.md) |
-| Ubuntu 24.04 | `.deb` | [Linux 安装](docs/install-linux.md) |
-| Windows 11 | `windows-x64-setup.exe` / `windows-x64-offline.exe` | [Windows 安装](docs/install-windows.md) |
+| 系统 | 轻量包 | 离线包 | 教程 |
+|---|---|---|---|
+| Arch Linux | [下载 .pkg.tar.zst](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-arch-x86_64.pkg.tar.zst) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-arch-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
+| Ubuntu 24.04 | [下载 .deb](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-ubuntu24.04-amd64.deb) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-ubuntu24.04-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
+| Fedora 44 | [下载 .rpm](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-fedora44-x86_64.rpm) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-fedora44-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
+| Windows 11 | [下载 setup.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/Beam-0.1.0-beta.2-windows-x64-setup.exe) | [下载 offline.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/Beam-0.1.0-beta.2-windows-x64-offline.exe) | [Windows 安装](docs/install-windows.md) |
 
 轻量包在安装或首次配置时下载模型。离线完整包包含同一个模型；Windows 离线包也包含小狼毫。
 Linux 的离线包仍需要系统已有 Fcitx5-Rime 及发行版依赖。

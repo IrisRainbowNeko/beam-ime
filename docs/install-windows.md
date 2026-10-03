@@ -1,6 +1,6 @@
 # Windows 11 安装
 
-下载 `Beam-0.1.0-beta.1-windows-x64-setup.exe` 或 `-offline.exe`。
+下载 `Beam-0.1.0-beta.2-windows-x64-setup.exe` 或 `-offline.exe`。
 轻量版下载模型；离线版已经包含模型和小狼毫安装器。
 
 1. 运行安装器。Beam 安装在当前用户的应用目录。

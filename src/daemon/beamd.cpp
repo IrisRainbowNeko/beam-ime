@@ -126,7 +126,7 @@ int beamd_main(int argc, char ** argv) {
         if (ec) executable = std::filesystem::absolute(argv[0]);
 #endif
         auto dir = executable.parent_path();
-        auto installed = dir / "../lib/beam-ime";
+        auto installed = dir / ".." / BEAM_INSTALL_LIBDIR / "beam-ime";
         options.backend_dir = std::filesystem::exists(installed) ? installed.u8string() : dir.u8string();
     }
 

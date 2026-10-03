@@ -23,6 +23,20 @@ bash tools/build.sh release
 python3 tools/package_linux.py --format deb --model models/beam-0.6b-q8_0.gguf
 ```
 
+## Fedora 44
+
+```sh
+sudo dnf install gcc-c++ cmake ninja-build git pkgconf-pkg-config boost-devel json-devel librime-devel librime-lua fcitx5-rime glog-devel libX11-devel vulkan-headers vulkan-loader-devel glslc spirv-headers-devel python3 python3-pyyaml python3-pip rpm-build redhat-rpm-config
+python3 -m venv --system-site-packages .venv
+source .venv/bin/activate
+python3 -m pip install pypinyin==0.55.0
+bash tools/build.sh release -DCMAKE_INSTALL_LIBDIR=lib64
+python3 tools/package_linux.py --format rpm --model models/beam-0.6b-q8_0.gguf
+```
+
+RPM 在 Fedora 本机或 Fedora 44 容器中构建，绑定构建时的 librime 包版本。
+输出包括 `.rpm` 和 Fedora 离线 `.tar`，可通过 `sudo dnf install ./dist/*.rpm` 安装。
+
 省略 `--model` 只构建轻量程序包。CPU-only 构建：`bash tools/build.sh cpu`。
 开发运行：`build/release/bin/beamd --model /path/model.gguf`。
 不要把开发构建直接覆盖到正在运行的输入法。

@@ -45,15 +45,18 @@ def offline_bundle(artifact, model, platform):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--format", choices=("deb", "arch"), required=True)
+    parser.add_argument("--format", choices=("deb", "arch", "rpm"), required=True)
     parser.add_argument("--build", type=Path, default=ROOT / "build/release")
     parser.add_argument("--model", type=Path, help="also make the offline bundle")
     parser.add_argument('--existing-package', type=Path, help='bundle an already built distribution package')
     args = parser.parse_args()
+    platform = {"deb": "ubuntu24.04", "arch": "arch", "rpm": "fedora"}[args.format]
+    if args.format == "rpm":
+        platform += subprocess.check_output(["rpm", "--eval", "%{fedora}"], text=True).strip()
     if args.existing_package:
         if not args.model:
             parser.error('--existing-package requires --model')
-        print(offline_bundle(args.existing_package, args.model, args.format))
+        print(offline_bundle(args.existing_package, args.model, platform))
         return
     version = (ROOT / "VERSION").read_text().strip()
     # Stage on the native temporary filesystem, including when the checkout is on NTFS.
@@ -80,6 +83,36 @@ def main():
         artifact = dist / f"beam-ime-{version}-ubuntu24.04-amd64.deb"
         normalize_permissions(stage)
         subprocess.run(["dpkg-deb", "--root-owner-group", "--build", str(stage), str(artifact)], check=True)
+    elif args.format == "rpm":
+        abi = subprocess.check_output(["rpm", "-q", "--qf", "%{EPOCHNUM}:%{VERSION}-%{RELEASE}",
+                                       "librime"], text=True).strip()
+        private_libs = next((stage / "usr").glob("lib*/beam-ime")).relative_to(stage)
+        plugin = next((stage / "usr").glob("lib*/rime-plugins/librime-beam.so")).relative_to(stage)
+        artifact = dist / f"beam-ime-{version}-{platform}-x86_64.rpm"
+        normalize_permissions(stage)
+        with tempfile.TemporaryDirectory(prefix="beam-rpm-") as rpm_dir:
+            spec = Path(rpm_dir) / "beam-ime.spec"
+            spec.write_text(
+                "%global debug_package %{nil}\n"
+                "%global _build_id_links none\n"
+                "%global __provides_exclude_from ^/usr/lib(64)?/(beam-ime|rime-plugins)/.*$\n"
+                "%global __requires_exclude ^lib(ggml|llama).*\\.so.*$\n"
+                f"Name: beam-ime\nVersion: {version.replace('-beta.', '~beta.')}\nRelease: 1%{{?dist}}\n"
+                "Summary: Local keys-conditioned language model input method\n"
+                "License: Apache-2.0 AND MIT AND BSD-3-Clause AND BSL-1.0 AND GPL-3.0-only\n"
+                "URL: https://github.com/IrisRainbowNeko/beam-ime\nBuildArch: x86_64\n"
+                f"Requires: librime%{{?_isa}} = {abi}\n"
+                "Requires: fcitx5-rime, librime-lua, python3, python3-pyyaml\n"
+                "Recommends: mesa-vulkan-drivers\n\n"
+                "%description\nBeam runs a local language model and supplies candidates to Fcitx5-Rime.\n\n"
+                "%install\nmkdir -p \"%{buildroot}\"\n"
+                f'cp -a "{stage}/usr" "%{{buildroot}}/"\n\n'
+                "%files\n%defattr(-,root,root,-)\n/usr/bin/beamd\n/usr/bin/beamctl\n"
+                f"/{private_libs}\n/{plugin}\n/usr/share/beam-ime\n"
+                "%license /usr/share/licenses/beam-ime\n")
+            subprocess.run(["rpmbuild", "-bb", "--define", f"_topdir {rpm_dir}",
+                            "--define", f"_rpmdir {dist}", "--define", f"_rpmfilename {artifact.name}",
+                            str(spec)], check=True)
     else:
         abi = subprocess.check_output(["pacman", "-Q", "librime"], text=True).split()[1]
         size = sum(p.stat().st_size for p in stage.rglob("*") if p.is_file())
@@ -93,7 +126,7 @@ def main():
         normalize_permissions(stage)
         subprocess.run(["tar", "--zstd", "--owner=0", "--group=0", "-cf", str(artifact), "-C", str(stage), ".PKGINFO", "usr"], check=True)
     if args.model:
-        offline_bundle(artifact, args.model, args.format)
+        offline_bundle(artifact, args.model, platform)
     manifest = {"version": version, "platform": args.format, "rimeAbi": (args.build / "rime-abi.txt").read_text().strip(),
                 "artifact": artifact.name, "sha256": sha256(artifact),
                 "sourceCommit": subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),

@@ -1,11 +1,14 @@
 # 发布流程
 
-版本号在 `VERSION`、CMake、默认模型 manifest 和发布说明中保持一致。
+程序版本号在 `VERSION`、CMake、诊断命令、安装脚本、PKGBUILD 和发布说明中保持一致。
 更新日志后提交代码并创建 `vVERSION` 标签。
 
-先创建 GitHub Release 草稿并上传 manifest 对应的 GGUF，再触发 Release packages 工作流。
-工作流下载该模型，构建 Ubuntu、Arch 和 Windows 的轻量及离线包，将制品上传至同一草稿。
+Release packages 工作流从模型 manifest 的固定 URL 下载已发布模型，构建 Ubuntu、Arch、
+Fedora 44 和 Windows 的轻量及离线包，并自动创建或更新 Release 草稿。
 发布者可直接在 GitHub 上公开该 Beta Release。
+
+发布说明按平台列出前端、轻量包和离线包的直接链接，以及对应的安装命令。
+链接中的 tag 与文件名应对应本次上传的资产；模型链接可以继续指向独立的旧版模型资产。
 
 本地构建也可使用 `tools/package_linux.py` 和 `tools/package_windows.py`。
 所有文件准备后运行 `python tools/checksums.py dist --model-manifest models/default.json`

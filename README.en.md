@@ -4,7 +4,7 @@ A local Chinese input method powered by a keys-conditioned 0.6B language model.
 Type initials, partial/full pinyin, or Chinese-English mixed input. Beam returns
 whole-input candidates and keeps Rime Ice available as a fallback.
 
-**Beta 0.1.0-beta.1:** x86_64 Arch Linux, Ubuntu 24.04 and Windows 11.
+**Beta 0.1.0-beta.2:** x86_64 Arch Linux, Ubuntu 24.04, Fedora 44 and Windows 11.
 [Downloads](https://github.com/IrisRainbowNeko/beam-ime/releases).
 
 - Linux: install the distribution package, run `beamctl model-install --download`,

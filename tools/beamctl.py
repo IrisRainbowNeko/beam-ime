@@ -66,7 +66,7 @@ def main():
         spec = read_manifest(args.manifest)
         print(install(spec, data_dir() / "models" / spec["filename"], args.source, args.download))
     elif args.command == "doctor":
-        result = {"version": "0.1.0-beta.1", "platform": sys.platform, "modelInstalled": (data_dir() / "models/beam-0.6b-q8_0.gguf").exists()}
+        result = {"version": "0.1.0-beta.2", "platform": sys.platform, "modelInstalled": (data_dir() / "models/beam-0.6b-q8_0.gguf").exists()}
         try:
             result["service"] = query({"op": "health"})
         except (OSError, ValueError):
