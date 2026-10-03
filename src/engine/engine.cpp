@@ -40,6 +40,7 @@ struct Engine::Impl {
     llama_context * ctx = nullptr;
     const llama_vocab * vocab = nullptr;
     llama_memory_t mem = nullptr;
+    llama_batch batch = {};
     int n_vocab = 0;
 
     std::vector<llama_token> cached;       // seq 0 tokens in the KV cache
@@ -102,6 +103,7 @@ struct Engine::Impl {
         vocab = llama_model_get_vocab(model);
         n_vocab = llama_vocab_n_tokens(vocab);
         mem = llama_get_memory(ctx);
+        batch = llama_batch_init(std::max(512, o.beams), 0, 1);
         // Warm up the batch sizes used per keystroke so the first keys are not slow.
         for (int n = 1; n <= 64; n *= 2) {
             auto seed = tokenize("按");
@@ -114,6 +116,7 @@ struct Engine::Impl {
     }
 
     ~Impl() {
+        llama_batch_free(batch);
         if (ctx) llama_free(ctx);
         if (model) llama_model_free(model);
     }
@@ -154,7 +157,7 @@ struct Engine::Impl {
     }
 
     bool decode_seq0(const std::vector<llama_token> & tokens, int start, int logits_from) {
-        llama_batch batch = llama_batch_init((int) tokens.size() - start, 0, 1);
+        batch.n_tokens = 0;
         for (int i = start; i < (int) tokens.size(); ++i) {
             int j = batch.n_tokens++;
             batch.token[j] = tokens[i];
@@ -163,9 +166,7 @@ struct Engine::Impl {
             batch.seq_id[j][0] = 0;
             batch.logits[j] = i >= logits_from;
         }
-        bool ok = llama_decode(ctx, batch) == 0;
-        llama_batch_free(batch);
-        return ok;
+        return llama_decode(ctx, batch) == 0;
     }
 
     void reset_cache() {
@@ -239,38 +240,50 @@ struct Engine::Impl {
         const int B = options.beams;
         int np = (int) prompt_toks.size();
         std::vector<Beam> beams = {{{}, 0.f, -1}};
+        std::vector<Beam> next;
         std::vector<std::pair<float, std::vector<llama_token>>> finished;
+        struct Cand { float score; int parent; llama_token tok; };
+        std::vector<Cand> cands;
+        std::vector<std::pair<float, llama_token>> top;
+        std::vector<int> parent_seqs;
+        cands.reserve(2 * B * B);
+        top.reserve(2 * B);
+        parent_seqs.reserve(B);
         int set = 0;
-        std::vector<std::vector<float>> logits = {first_logits};
+        // Consume these borrowed rows before the next decode overwrites them.
+        std::vector<const float *> logits = {first_logits.data()};
+        logits.reserve(B);
         bool ok = true;
         for (int step = 0; step < max_new && !beams.empty(); ++step) {
             if (Clock::now() > deadline) { ok = false; break; }
-            struct Cand { float score; int parent; llama_token tok; };
-            std::vector<Cand> cands;
-            std::vector<std::pair<float, llama_token>> top;
+            cands.clear();
             for (int b = 0; b < (int) beams.size(); ++b) {
-                log_softmax_topk(logits[b].data(), 2 * B, top);
+                log_softmax_topk(logits[b], 2 * B, top);
                 for (auto & [lp, t] : top) cands.push_back({beams[b].score + lp, b, t});
             }
             std::sort(cands.begin(), cands.end(), [](auto & a, auto & b) { return a.score > b.score; });
-            std::vector<Beam> next;
-            std::vector<int> parent_seqs;
+            next.resize(B);
+            int n_next = 0;
+            parent_seqs.clear();
             for (auto & c : cands) {
-                if ((int) next.size() >= B) break;
+                if (n_next >= B) break;
                 auto & t = beams[c.parent].toks;
                 if (stops(c.tok)) {
                     if (!t.empty()) finished.push_back({c.score / (float) (t.size() + 1), t});
                     continue;
                 }
-                next.push_back({t, c.score, -1});
-                next.back().toks.push_back(c.tok);
+                auto & child = next[n_next++];
+                child.toks = t;
+                child.toks.push_back(c.tok);
+                child.score = c.score;
                 parent_seqs.push_back(beams[c.parent].seq);
             }
+            next.resize(n_next);
             if ((int) finished.size() >= B || next.empty()) break;
             // Rebuild KV for the new set: copy each parent's cells, then append the new token.
             int base = 1 + (1 - set) * B;
             for (int i = 0; i < B; ++i) llama_memory_seq_rm(mem, base + i, -1, -1);
-            llama_batch batch = llama_batch_init((int) next.size(), 0, 1);
+            batch.n_tokens = 0;
             for (int i = 0; i < (int) next.size(); ++i) {
                 int parent_seq = parent_seqs[i];
                 int dst = base + i;
@@ -285,17 +298,15 @@ struct Engine::Impl {
                 batch.logits[j] = true;
             }
             bool decoded = llama_decode(ctx, batch) == 0;
-            llama_batch_free(batch);
             if (!decoded) { ok = false; break; }
             int old_base = 1 + set * B;
             for (int i = 0; i < B; ++i) llama_memory_seq_rm(mem, old_base + i, -1, -1);
             set = 1 - set;
             logits.clear();
             for (int i = 0; i < (int) next.size(); ++i) {
-                const float * l = llama_get_logits_ith(ctx, i);
-                logits.emplace_back(l, l + n_vocab);
+                logits.push_back(llama_get_logits_ith(ctx, i));
             }
-            beams = next;
+            beams.swap(next);
         }
         for (int s = 1; s <= 2 * B; ++s) llama_memory_seq_rm(mem, s, -1, -1);
         if (!ok) return false;

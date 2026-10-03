@@ -50,3 +50,38 @@ class DaemonIntegration(unittest.TestCase):
             answer=self.call({"id":3,"op":"query","keys":"nihao","context":context,"beam_ms":0})
             self.assertTrue(answer["ok"])
             self.assertTrue(answer["candidates"])
+
+    def test_reused_buffers_after_editing_and_context_switch(self):
+        cases = [("nihao", ""), ("nhsj", ""), ("yonglinux", ""),
+                 ("nihao", "今天讨论软件"), ("ni'hao", "")]
+        expected = {}
+        for keys, context in cases:
+            answer = self.call({"id": 4, "op": "query", "keys": keys,
+                                "context": context, "beam_ms": 2000})
+            self.assertTrue(answer["beam_complete"])
+            expected[keys, context] = answer["candidates"]
+        for keys, context in reversed(cases):
+            with self.subTest(keys=keys, context=context):
+                # Exercise draft acceptance/rejection, backspace, and switching out of Top-1 mode.
+                for edited in (keys[:1], keys, keys[:-1]):
+                    self.call({"id": 5, "op": "query", "keys": edited,
+                               "context": context, "beam_ms": 0})
+                answer = self.call({"id": 6, "op": "query", "keys": keys,
+                                    "context": context, "beam_ms": 2000})
+                self.assertTrue(answer["beam_complete"])
+                self.assertEqual(answer["candidates"], expected[keys, context])
+
+    def test_reused_batch_survives_beam_timeout(self):
+        request = {"id": 7, "op": "query", "keys": "nihao", "beam_ms": 2000}
+        expected = self.call(request)
+        self.assertTrue(expected["beam_complete"])
+        interrupted = self.call({"id": 8, "op": "query", "keys": "nhsjwsny", "beam_ms": 1})
+        self.assertTrue(interrupted["ok"])
+        self.assertFalse(interrupted["beam_complete"])
+        top = self.call({"id": 9, "op": "query", "keys": "nihao", "max": 1, "beam_ms": 2000})
+        self.assertFalse(top["beam_complete"])
+        self.assertTrue(top["candidates"])
+        answer = self.call(request)
+        self.assertTrue(answer["beam_complete"])
+        self.assertEqual(answer["candidates"], expected["candidates"])
+        self.assertIn(top["candidates"][0], answer["candidates"])
