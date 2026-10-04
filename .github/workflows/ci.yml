@@ -16,10 +16,15 @@ jobs:
       - run: bash tools/build.sh tests
   windows-files:
     runs-on: windows-latest
+    strategy:
+      matrix:
+        shell: [powershell, pwsh]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - shell: pwsh
-        run: ./tests/windows-files.ps1
+      - shell: ${{ matrix.shell }}
+        run: |
+          ./tests/windows-files.ps1
+          ./tests/windows-setup.ps1
   ubuntu:
     runs-on: ubuntu-24.04
     steps:

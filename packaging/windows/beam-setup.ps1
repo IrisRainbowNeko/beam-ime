@@ -15,7 +15,7 @@ $RunKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
 function Find-Weasel {
     foreach ($key in 'HKLM:\SOFTWARE\Rime\Weasel','HKLM:\SOFTWARE\WOW6432Node\Rime\Weasel') {
         $entry = Get-ItemProperty $key -ErrorAction SilentlyContinue
-        if ($entry -and $entry.WeaselRoot -and (Test-Path (Join-Path $entry.WeaselRoot 'WeaselServer.exe'))) { return $entry.WeaselRoot }
+        if ($entry -and $entry.WeaselRoot -and (Test-Path -LiteralPath (Join-Path $entry.WeaselRoot 'WeaselServer.exe'))) { return $entry.WeaselRoot }
     }
     return $null
 }
@@ -42,8 +42,10 @@ function Stop-Weasel($Root) {
 
 function Check-Weasel($Root) {
     $exe = Join-Path $Root 'WeaselServer.exe'
-    $version = (Get-Item $exe).VersionInfo.FileVersion
-    if ($version -notmatch '^0\.17\.4(\.0)?\s*$') { throw "Beam requires Weasel 0.17.4.0; found $version. Existing installation was kept." }
+    # The official 0.17.4 executable has an empty FileVersion string.
+    $info = (Get-Item -LiteralPath $exe).VersionInfo
+    $version = '{0}.{1}.{2}.{3}' -f $info.FileMajorPart,$info.FileMinorPart,$info.FileBuildPart,$info.FilePrivatePart
+    if ($version -ne '0.17.4.0') { throw "Beam requires Weasel 0.17.4.0; found $version at $exe. Existing installation was kept." }
     $bytes = [IO.File]::ReadAllBytes($exe)
     $pe = [BitConverter]::ToInt32($bytes,0x3c)
     if ([BitConverter]::ToUInt16($bytes,$pe+4) -ne 0x8664) { throw 'The 64-bit build of Weasel is required.' }
@@ -52,16 +54,21 @@ function Check-Weasel($Root) {
 function Invoke-SystemStep($Step) {
     $powershell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $script = Join-Path $PSScriptRoot 'beam-setup.ps1'
-    Invoke-Process $powershell "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -Action $Step -InstallDir `"$InstallDir`"" $true
+    try {
+        Invoke-Process $powershell "-NoProfile -ExecutionPolicy Bypass -File `"$script`" -Action $Step -InstallDir `"$InstallDir`"" $true
+    } catch { throw "$Step failed: $($_.Exception.Message). See $(Join-Path $InstallDir "setup-$Step.log")" }
 }
 
 function Update-SchemaList($Path, [bool]$Enable) {
     $marker = '# Beam IME'
-    if (Test-Path $Path) { $text = [IO.File]::ReadAllText($Path) } else { $text = "patch:`r`n" }
+    if (Test-Path -LiteralPath $Path) { $text = [IO.File]::ReadAllText($Path) }
+    elseif ($Enable) { $text = "patch:`r`n" }
+    else { return }
     if ($Enable) {
+        if ([string]::IsNullOrWhiteSpace($text)) { $text = "patch:`r`n" }
         if ($text -match '(?m)^.*schema:\s*beam_ice') { return }
         $backup = "$Path.beam-backup"
-        if ((Test-Path $Path) -and -not (Test-Path $backup)) { Copy-Item -LiteralPath $Path -Destination $backup }
+        if ((Test-Path -LiteralPath $Path) -and -not (Test-Path -LiteralPath $backup)) { Copy-Item -LiteralPath $Path -Destination $backup }
         $lines = [Collections.Generic.List[string]]($text -split '\r?\n')
         $list = -1; $patch = -1
         for ($i=0; $i -lt $lines.Count; $i++) {
@@ -83,18 +90,20 @@ function Update-SchemaList($Path, [bool]$Enable) {
         } else { throw 'Unsupported default.custom.yaml; add beam_ice to its schema list manually.' }
         $text = $lines -join "`r`n"
     } else {
-        $text = (($text -split '\r?\n') | Where-Object { -not $_.EndsWith($marker) }) -join "`r`n"
+        $lines = $text -split '\r?\n'
+        if (-not @($lines | Where-Object { $_.EndsWith($marker) }).Count) { return }
+        $text = ($lines | Where-Object { -not $_.EndsWith($marker) }) -join "`r`n"
     }
     [IO.File]::WriteAllText($Path, $text.TrimEnd()+"`r`n", $Utf8)
 }
 
-try {
+function Invoke-Setup {
     if ($Action -eq 'Doctor') {
         $endpoint = Join-Path $State 'beamd.endpoint'
         $status = @{version='0.1.0-beta.2'; weaselInstalled=[bool](Find-Weasel); running=[bool](Get-Process beamd -ErrorAction SilentlyContinue)}
-        if (Test-Path $endpoint) {
+        if (Test-Path -LiteralPath $endpoint) {
             try {
-                $info = Get-Content -Raw $endpoint | ConvertFrom-Json
+                $info = Get-Content -LiteralPath $endpoint -Raw -Encoding UTF8 | ConvertFrom-Json
                 $client = New-Object Net.Sockets.TcpClient
                 $client.ReceiveTimeout=3000; $client.SendTimeout=3000
                 $client.Connect('127.0.0.1',[int]$info.port)
@@ -107,36 +116,37 @@ try {
             } catch { $status.service=@{ok=$false;error='unavailable'} }
         }
         $status | ConvertTo-Json -Depth 5
-        exit 0
+        return
     }
     $root=Find-Weasel
     if ($Action -in 'SystemInstall','SystemRestore') {
         if (-not $root) { throw 'Weasel is missing.' }
-        Check-Weasel $root
         $systemState=Join-Path $root 'beam-backup'
+        $fileRecord=Join-Path $systemState 'files.json'
+        if ($Action -eq 'SystemRestore' -and -not (Test-Path -LiteralPath $fileRecord)) { return }
+        if ($Action -eq 'SystemInstall') { Check-Weasel $root }
         $hostRecord=Join-Path $systemState 'host.json'
         $hostHash=Get-FileHashValue (Join-Path $root 'WeaselServer.exe')
-        if ((Test-Path $hostRecord) -and (Get-Content -Raw $hostRecord | ConvertFrom-Json).sha256 -ne $hostHash) {
+        if ((Test-Path -LiteralPath $hostRecord) -and (Get-Content -LiteralPath $hostRecord -Raw -Encoding UTF8 | ConvertFrom-Json).sha256 -ne $hostHash) {
             throw 'Weasel has changed since Beam was installed. Its current DLL and the backup were kept.'
         }
         Stop-Weasel $root
         if ($Action -eq 'SystemInstall') {
             Write-AtomicJson $hostRecord @{sha256=$hostHash;version='0.17.4.0'}
             $legacy=Join-Path $root 'rime.dll.orig'
-            $fileRecord=Join-Path $systemState 'files.json'
-            if ((Test-Path $legacy) -and -not (Test-Path $fileRecord)) {
+            if ((Test-Path -LiteralPath $legacy) -and -not (Test-Path -LiteralPath $fileRecord)) {
                 $backup=Join-Path $systemState 'legacy-original.dll'
                 Copy-Item -LiteralPath $legacy -Destination $backup -Force
                 Write-AtomicJson $fileRecord @(@{Path=(Join-Path $root 'rime.dll');Backup=$backup;Existed=$true;InstalledHash=(Get-FileHashValue (Join-Path $root 'rime.dll'))})
             }
             Install-ManagedFiles @(@{Source=(Join-Path $InstallDir 'payload\rime.dll');Destination=(Join-Path $root 'rime.dll')}) $systemState
         } else { Restore-ManagedFiles $systemState }
-        exit 0
+        return
     }
     if ($Action -eq 'Install' -and -not $root) {
-        $lock=Get-Content -Raw (Join-Path $InstallDir 'dependencies.lock.json') | ConvertFrom-Json
+        $lock=Get-Content -LiteralPath (Join-Path $InstallDir 'dependencies.lock.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         $installer=Join-Path $InstallDir 'payload\weasel-installer.exe'
-        if (-not (Test-Path $installer)) {
+        if (-not (Test-Path -LiteralPath $installer)) {
             if (-not $Download) { throw 'The offline Weasel installer is missing.' }
             Invoke-WebRequest -UseBasicParsing -Uri $lock.weasel.url -OutFile $installer
         }
@@ -144,30 +154,38 @@ try {
         Invoke-Process $installer '/S' $true
         $root=Find-Weasel
     }
-    if (-not $root) { throw 'Weasel was not found.' }
-    Check-Weasel $root
+    if ($Action -eq 'Install') {
+        if (-not $root) { throw 'Weasel was not found.' }
+        Check-Weasel $root
+    }
     $entry=Get-ItemProperty 'HKCU:\Software\Rime\Weasel' -ErrorAction SilentlyContinue
     $userDir=if ($entry -and $entry.RimeUserDir) { [Environment]::ExpandEnvironmentVariables($entry.RimeUserDir) } else { Join-Path $env:APPDATA 'Rime' }
-    [IO.Directory]::CreateDirectory($userDir) | Out-Null
     Get-Process beamd -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq (Join-Path $InstallDir 'beamd.exe') } | Stop-Process -Force -ErrorAction SilentlyContinue
     if ($Action -eq 'Uninstall') {
-        Invoke-SystemStep 'SystemRestore'
+        $userFiles=Join-Path $State 'files'
+        $redeploy=Test-Path -LiteralPath (Join-Path $userFiles 'files.json')
+        if ($root -and (Test-Path -LiteralPath (Join-Path $root 'beam-backup\files.json'))) {
+            Invoke-SystemStep 'SystemRestore'
+            $redeploy=$true
+        }
         Remove-ItemProperty $RunKey -Name BeamIME -ErrorAction SilentlyContinue
         Update-SchemaList (Join-Path $userDir 'default.custom.yaml') $false
-        Restore-ManagedFiles (Join-Path $State 'files')
+        Restore-ManagedFiles $userFiles
     } else {
-        $manifest=Get-Content -Raw (Join-Path $InstallDir 'models\default.json') | ConvertFrom-Json
+        [IO.Directory]::CreateDirectory($userDir) | Out-Null
+        $redeploy=$true
+        $manifest=Get-Content -LiteralPath (Join-Path $InstallDir 'models\default.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         $settingsPath=Join-Path $State 'settings.json'
-        $settings=if (Test-Path $settingsPath) { Get-Content -Raw $settingsPath | ConvertFrom-Json } else { $null }
+        $settings=if (Test-Path -LiteralPath $settingsPath) { Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
         $legacy=Join-Path $State 'models\beam.gguf'
         $modelPath=if ($Model) { [IO.Path]::GetFullPath($Model) }
             elseif ($settings -and $settings.model) { $settings.model }
-            elseif (Test-Path $legacy) { $legacy }
+            elseif (Test-Path -LiteralPath $legacy) { $legacy }
             else { Join-Path $State ("models\"+$manifest.filename) }
-        if (-not (Test-Path $modelPath)) {
+        if (-not (Test-Path -LiteralPath $modelPath)) {
             if ($Model -or ($settings -and $settings.model)) { throw "Model not found: $modelPath" }
             $source=Join-Path $InstallDir ('models\'+$manifest.filename)
-            if (-not (Test-Path $source)) { $source=$null }
+            if (-not (Test-Path -LiteralPath $source)) { $source=$null }
             Install-ModelFile $manifest $modelPath $source ([bool]$Download)
         }
         $cpuMode=[bool]$Cpu -or ($settings -and $settings.cpu)
@@ -175,7 +193,7 @@ try {
         Invoke-SystemStep 'SystemInstall'
         try {
             $data=Join-Path $InstallDir 'payload\rime-data'
-            $pairs=@(Get-ChildItem $data -Recurse -File | ForEach-Object {
+            $pairs=@(Get-ChildItem -LiteralPath $data -Recurse -File | ForEach-Object {
                 @{Source=$_.FullName;Destination=(Join-Path $userDir $_.FullName.Substring($data.Length+1))}
             })
             Install-ManagedFiles $pairs (Join-Path $State 'files')
@@ -192,8 +210,22 @@ try {
             throw
         }
     }
-    Invoke-Process (Join-Path $root 'WeaselDeployer.exe') '/deploy'
-    Invoke-Process (Join-Path $root 'WeaselServer.exe') '' $false 0
+    if ($root -and $redeploy) {
+        Invoke-Process (Join-Path $root 'WeaselDeployer.exe') '/deploy'
+        Invoke-Process (Join-Path $root 'WeaselServer.exe') '' $false 0
+    }
     Write-Host "Beam $Action completed. User dictionaries and models are retained on uninstall."
-    exit 0
-} catch { Write-Error $_ -ErrorAction Continue; exit 1 }
+}
+
+if ($MyInvocation.InvocationName -ne '.') {
+    $logging=$false
+    try {
+        if ($Action -ne 'Doctor') {
+            Start-Transcript -LiteralPath (Join-Path $InstallDir "setup-$Action.log") -Append | Out-Null
+            $logging=$true
+        }
+        Invoke-Setup
+        exit 0
+    } catch { Write-Error $_ -ErrorAction Continue; exit 1 }
+    finally { if ($logging) { Stop-Transcript | Out-Null } }
+}

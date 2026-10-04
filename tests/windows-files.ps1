@@ -1,6 +1,7 @@
 $ErrorActionPreference='Stop'
 Import-Module (Join-Path $PSScriptRoot '../packaging/windows/Beam.Files.psm1') -Force
-$root=Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString('N'))
+$unicode=[string][char]0x8f93+[char]0x5165+[char]0x6cd5
+$root=Join-Path ([IO.Path]::GetTempPath()) ("$unicode [Beam test] " + [guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($root) | Out-Null
 try {
     $source=Join-Path $root 'package'
@@ -25,7 +26,7 @@ try {
         if ($_.Exception.Message -eq 'expected copy failure') { throw }
     }
     if ([IO.File]::ReadAllText($target) -ne 'user change') { throw 'failed transaction did not roll back' }
-    if (Test-Path (Join-Path $freshState 'files.json')) { throw 'failed transaction left stale state' }
+    if (Test-Path -LiteralPath (Join-Path $freshState 'files.json')) { throw 'failed transaction left stale state' }
     $e=$null;$t=$null
     [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../packaging/windows/beam-setup.ps1'),[ref]$t,[ref]$e)
     if ($e) { throw ($e | Out-String) }

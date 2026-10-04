@@ -19,8 +19,8 @@ function Install-ManagedFiles($Pairs, $StateDir) {
     [IO.Directory]::CreateDirectory($StateDir) | Out-Null
     $manifest = Join-Path $StateDir 'files.json'
     $records = @()
-    $previous = if (Test-Path $manifest) { [IO.File]::ReadAllBytes($manifest) } else { $null }
-    if (Test-Path $manifest) { $records = @((Get-Content -Raw $manifest | ConvertFrom-Json)) }
+    $previous = if (Test-Path -LiteralPath $manifest) { [IO.File]::ReadAllBytes($manifest) } else { $null }
+    if (Test-Path -LiteralPath $manifest) { $records = @((Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json)) }
     $attempt = @()
     try {
         foreach ($pair in $Pairs) {
@@ -59,8 +59,8 @@ function Install-ManagedFiles($Pairs, $StateDir) {
 
 function Restore-ManagedFiles($StateDir) {
     $manifest = Join-Path $StateDir 'files.json'
-    if (-not (Test-Path $manifest)) { return }
-    $records = @((Get-Content -Raw $manifest | ConvertFrom-Json))
+    if (-not (Test-Path -LiteralPath $manifest)) { return }
+    $records = @((Get-Content -LiteralPath $manifest -Raw -Encoding UTF8 | ConvertFrom-Json))
     foreach ($entry in $records) {
         $hash = Get-FileHashValue $entry.Path
         if ($hash -and $hash -ne $entry.InstalledHash) { Write-Warning "Keeping modified file: $($entry.Path)"; continue }
@@ -84,7 +84,7 @@ function Install-ModelFile($Manifest, $Target, $Source, [bool]$Download) {
             [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
             Invoke-WebRequest -UseBasicParsing -Uri $Manifest.url -OutFile $temporary
         } else { throw 'The offline model is missing.' }
-        if ((Get-Item $temporary).Length -ne $Manifest.size -or (Get-FileHashValue $temporary) -ne $Manifest.sha256) {
+        if ((Get-Item -LiteralPath $temporary).Length -ne $Manifest.size -or (Get-FileHashValue $temporary) -ne $Manifest.sha256) {
             throw 'Model size or SHA-256 mismatch; the previous model has been kept.'
         }
         Move-Item -LiteralPath $temporary -Destination $Target -Force

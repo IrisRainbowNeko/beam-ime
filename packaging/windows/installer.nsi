@@ -52,7 +52,7 @@ Section
   nsExec::ExecToLog '"${POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\beam-setup.ps1" -Action Install -InstallDir "$INSTDIR" ${SETUP_FLAGS}'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "安装没有完成。详情见日志；可在应用列表运行卸载恢复。"
+    MessageBox MB_ICONSTOP "安装没有完成。错误日志：$INSTDIR\setup-Install.log。可在应用列表运行卸载恢复。"
     Abort
   ${EndIf}
 SectionEnd
@@ -60,7 +60,7 @@ Section "Uninstall"
   nsExec::ExecToLog '"${POWERSHELL}" -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\beam-setup.ps1" -Action Uninstall -InstallDir "$INSTDIR"'
   Pop $0
   ${If} $0 != 0
-    MessageBox MB_ICONSTOP "恢复未完成，备份和卸载程序已保留。"
+    MessageBox MB_ICONSTOP "恢复未完成，备份和卸载程序已保留。错误日志：$INSTDIR\setup-Uninstall.log。"
     Abort
   ${EndIf}
   DeleteRegKey HKCU "${UNINST_KEY}"

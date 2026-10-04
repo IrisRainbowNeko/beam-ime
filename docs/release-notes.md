@@ -2,6 +2,19 @@
 
 新增 Fedora 44 安装包，并优化推理缓冲区复用。本地 0.6B 模型支持简拼、全拼和中英混输，雾凇提供词典候选。
 
+## Windows 安装修复（2026-10-04）
+
+本页两个 Windows EXE 已更新为修复包，版本名和下载链接仍为 Beta 2。
+已下载旧包的用户请重新下载，选择原 Beam 安装目录覆盖安装，已有模型会复用。
+
+- 修复官方小狼毫版本文本为空导致的 `Beam requires Weasel 0.17.4.0; found .`。
+- 支持小狼毫首次安装产生的空配置文件，修复安装失败后仍无法卸载的问题。
+- 修复中文路径的状态文件读取，安装和卸载错误会写入明确位置的日志。
+- 已在开启 UAC 的 Windows 11 虚拟机验证安装、重复安装和卸载；原 DLL 的 SHA-256 完整恢复，模型、词库和用户修改保留。
+
+修复源码单独提供为 [Windows 修复源码包](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-windows-fix1-source.tar.gz)，
+对应提交记录在两个 EXE 的 `.build.json` 中；原 Beta 2 标签和初始源码包仍对应初始发行。
+
 ## 下载哪个包
 
 所有安装包均为 **x86_64 / x64**。有网络时选轻量包；离线包包含相同程序和模型。
@@ -43,7 +56,7 @@ Linux 离线包不包含系统依赖，需预先安装 Fcitx5-Rime 等依赖；�
 
 运行下载的 `.exe`。缺少兼容小狼毫时，安装器会提示安装固定版本。
 轻量版按提示下载模型；离线版包含模型和小狼毫安装器。
-安装器暂未签名。完整步骤见 [Windows 安装教程](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.1.0-beta.2/docs/install-windows.md)。
+安装器暂未签名。完整步骤见 [Windows 安装教程](https://github.com/IrisRainbowNeko/beam-ime/blob/main/docs/install-windows.md)。
 
 ## 本次更新
 
@@ -58,5 +71,5 @@ Linux 离线包不包含系统依赖，需预先安装 Fcitx5-Rime 等依赖；�
 - [Arch PKGBUILD](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/PKGBUILD) · [源码包](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/beam-ime-0.1.0-beta.2-source.tar.gz) · [Windows 调试符号](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.2/Beam-0.1.0-beta.2-windows-x64-symbols.zip)
 - [Linux 安装、升级与卸载](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.1.0-beta.2/docs/install-linux.md) · [编译与打包](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.1.0-beta.2/docs/build.md) · [故障排查](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.1.0-beta.2/docs/troubleshooting.md)
 
-各平台验证范围见 [测试记录](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.1.0-beta.2/docs/testing.md)。
-Windows 已有交叉构建、Wine 与 Unicode GUI 宿主测试；真实 Windows 11 桌面端到端验证仍待完成。
+各平台验证范围见 [测试记录](https://github.com/IrisRainbowNeko/beam-ime/blob/main/docs/testing.md)。
+Windows 安装及恢复已在 Windows 11 虚拟机验证；GPU 驱动和日常桌面应用的完整输入流程仍需对应环境验证。

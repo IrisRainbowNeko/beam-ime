@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-beta.2 Windows Installer Fix - 2026-10-04
+
+- Read Weasel's numeric version when its file-version text is empty.
+- Initialize empty Rime configuration files and allow cleanup after a failed install.
+- Preserve Unicode paths when reading installation state and add persistent setup logs.
+- Test Windows PowerShell 5.1 and PowerShell 7; verify installation and restoration in Windows 11 with UAC enabled.
+
 ## 0.1.0-beta.2 - 2026-10-03
 
 - Fedora 44 RPM and offline packages, native build jobs and DNF installation instructions.

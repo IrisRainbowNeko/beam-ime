@@ -16,6 +16,14 @@
 模型和日志位于 `%LOCALAPPDATA%\beam-ime`；Rime 配置通常位于 `%APPDATA%\Rime`，
 也支持小狼毫注册表中指定的用户目录。
 
+安装过程日志位于所选 Beam 安装目录的 `setup-Install.log`，卸载日志为
+`setup-Uninstall.log`。管理员步骤分别记录在 `setup-SystemInstall.log` 和
+`setup-SystemRestore.log`；失败弹窗会显示日志位置。
+
+早期 Beta 2 如果提示 `Beam requires Weasel 0.17.4.0; found .`，原因是安装器读取了
+官方小狼毫中为空的版本文本。修复包改用数值版本，兼容小狼毫首次安装产生的空配置文件。
+运行修复包并选择原来的 Beam 安装目录即可重试，已有模型会复用；完成后也可正常卸载。
+
 诊断：在 PowerShell 中执行：
 
 ```powershell
