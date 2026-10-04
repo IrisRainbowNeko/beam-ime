@@ -7,6 +7,10 @@ whole-input candidates and keeps Rime Ice available as a fallback.
 **Beta 0.1.0-beta.2:** x86_64 Arch Linux, Ubuntu 24.04, Fedora 44 and Windows 11.
 [Downloads](https://github.com/IrisRainbowNeko/beam-ime/releases).
 
+![How Beam works: context and keys form a prompt; a local 0.6B model writes the first candidate incrementally, then a time-bounded beam search fills the rest](docs/images/how-it-works.en.svg)
+
+![Beam compared with classic pinyin IMEs and cloud AI input, with measured first candidates for the same keys](docs/images/comparison.en.svg)
+
 - Linux: install the distribution package, run `beamctl model-install --download`,
   run `beamctl setup`, redeploy Rime and choose Beam.
 - Windows: run the light or offline installer. It installs the compatible

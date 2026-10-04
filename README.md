@@ -5,6 +5,22 @@ Beam 在本机运行 0.6B 语言模型，通过 Rime 接入桌面输入法；雾
 
 [下载安装包](https://github.com/IrisRainbowNeko/beam-ime/releases) · [English](README.en.md) · [安装教程](docs/install-linux.md) · [Windows](docs/install-windows.md)
 
+## 工作原理
+
+![Beam 工作原理：上文和按键组成 prompt，本机 0.6B 模型先增量生成首选，再用限时 beam search 补齐候选](docs/images/how-it-works.svg)
+
+模型直接读按键和最近上屏的文字，一次生成整句，而不是先切音节再查词典。
+所以同样的 `sjwl`，上文是「我在学深度学习」时首选「神经网络」，上文是「昨晚又熬夜了」时首选「睡觉晚了」。
+每次按键先增量算出首选（复用 KV 缓存，并把上一次的结果当草稿验证），再在 100 ms 预算内做 beam search 补齐其余候选；
+超时或服务不可用时只显示雾凇候选，打字不会被卡住。
+
+## 和现有输入法的区别
+
+![Beam 与传统拼音输入法、云端 AI 输入的对比，以及同一组按键的实测首选](docs/images/comparison.svg)
+
+传统拼音输入法靠词典和词频拼句，长串首字母只有词库恰好收录时才能拼对；云端 AI 输入需要把输入内容发到服务器。
+Beam 把语言模型放在本机，按键和上文都不离开电脑。表中的首选均为实测结果，生成脚本见 `tools/render_diagrams.py`。
+
 ## 下载和安装
 
 当前版本：**0.1.0-beta.2**。面向 x86_64 的 Arch Linux、Ubuntu 24.04、Fedora 44 和 Windows 11。
