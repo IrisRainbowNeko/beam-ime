@@ -7,9 +7,14 @@ whole-input candidates and keeps Rime Ice available as a fallback.
 **Beta 0.1.0-beta.2:** x86_64 Arch Linux, Ubuntu 24.04, Fedora 44 and Windows 11.
 [Downloads](https://github.com/IrisRainbowNeko/beam-ime/releases).
 
-![How Beam works: context and keys form a prompt; a local 0.6B model writes the first candidate incrementally, then a time-bounded beam search fills the rest](docs/images/how-it-works.en.svg)
+![How Beam works: the same keys go through Rime Ice and through Beam-LLM; Beam uses the context and writes whole-sentence candidates locally](docs/images/overview.en.svg)
 
-![Beam compared with classic pinyin IMEs and cloud AI input, with measured first candidates for the same keys](docs/images/comparison.en.svg)
+A classic pinyin IME expands each initial into syllables, looks them up and joins words by
+frequency, so long abbreviations only work when the dictionary happens to have the phrase.
+Beam gives the context and the keys to Beam-LLM, a local Qwen3-0.6B fine-tune (Q8_0, llama.cpp),
+which writes the whole sentence: an incremental Top-1 first, then a beam search bounded to
+100 ms per key. Nothing leaves the computer, and if Beam takes over 400 ms the Rime Ice
+candidates are shown for that key. All candidates in the figure are measured.
 
 - Linux: install the distribution package, run `beamctl model-install --download`,
   run `beamctl setup`, redeploy Rime and choose Beam.
