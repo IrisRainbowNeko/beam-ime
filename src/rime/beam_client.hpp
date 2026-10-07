@@ -7,6 +7,13 @@
 #include <optional>
 #include <string>
 #include <vector>
+#include <nlohmann/json.hpp>
+#include <condition_variable>
+#include <deque>
+#include <future>
+#include <mutex>
+#include <thread>
+#include <atomic>
 
 namespace beam {
 
@@ -22,6 +29,7 @@ class Client {
     // stays quiet for `retry_after` so a dead daemon does not cost every keystroke a connect().
     std::optional<std::vector<std::string>> query(const std::string & keys, const std::string & context,
                                                   int max_candidates, int beam_ms, int timeout_ms);
+    std::optional<nlohmann::json> request(nlohmann::json request, int timeout_ms);
 
  private:
     void disconnect();
@@ -33,6 +41,31 @@ class Client {
     unsigned long long next_id_ = 1;
     std::chrono::steady_clock::time_point quiet_until_{};
     std::chrono::milliseconds retry_after_{2000};
+};
+
+// One ordered connection for feedback and queries; only immutable snapshots cross threads.
+class AsyncClient {
+ public:
+    explicit AsyncClient(std::string path = "");
+    ~AsyncClient();
+    void post(nlohmann::json request);
+    std::optional<nlohmann::json> query(nlohmann::json request, int timeout_ms);
+    uint64_t errors() const { return errors_.load(); }
+ private:
+    struct Work {
+        nlohmann::json request;
+        int timeout;
+        std::shared_ptr<std::promise<std::optional<nlohmann::json>>> reply;
+    };
+    bool enqueue(Work work);
+    void run();
+    Client client_;
+    std::mutex mutex_;
+    std::condition_variable available_;
+    std::deque<Work> queue_;
+    std::atomic<uint64_t> errors_{0};
+    bool stopping_ = false;
+    std::thread thread_;
 };
 
 }  // namespace beam

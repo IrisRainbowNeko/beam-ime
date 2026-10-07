@@ -44,7 +44,7 @@ def main():
         daemon = None
         try:
             daemon = subprocess.Popen([str(binary / 'beamd'), '--model', str(args.model.resolve()),
-                '--ngl', '0', '--threads', '2', '--socket', str(endpoint)], env=env,
+                '--ngl', '0', '--threads', '2', '--socket', str(endpoint), '--learning-dir', str(root / 'learning')], env=env,
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             for _ in range(300):
                 if daemon.poll() is not None:
@@ -58,13 +58,18 @@ def main():
                             assert json.loads(stream.readline())['ok']
                     break
                 time.sleep(.1)
-            result = subprocess.run(command + ['nihao', '{space}'], env=env,
+            result = subprocess.run(command + ['@beam_learning', 'nihao', '{space}', 'shijie', '{Escape}'], env=env,
                                     capture_output=True, text=True, timeout=180)
             if result.returncode:
                 raise RuntimeError(result.stderr)
             print(result.stdout)
             if 'commit: ' not in result.stdout:
                 raise RuntimeError(result.stderr + '\nNo committed candidate')
+            import sqlite3
+            with sqlite3.connect(root / 'learning/learning.sqlite3') as db:
+                learned = db.execute('SELECT COUNT(*) FROM recent').fetchone()[0]
+            if learned != 1:
+                raise RuntimeError(f'Expected exactly one committed learning event, got {learned}')
             daemon.terminate()
             daemon.wait(timeout=15)
             fallback = subprocess.run(command + ['nihao', '{space}'], env=env, check=True,

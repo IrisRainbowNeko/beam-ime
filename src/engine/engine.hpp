@@ -40,6 +40,7 @@ class Engine {
     bool ok() const;
     const std::string & model_name() const;
     const std::string & backend_name() const;
+    bool set_adapter(const std::string & path, std::string & error);
     // keys: raw input letters ("nhsj", "ni'hao"); context: text the user typed before, any length.
     QueryResult query(const std::string & keys, const std::string & context, const QueryOptions & options);
 

@@ -41,6 +41,7 @@ struct Engine::Impl {
     const llama_vocab * vocab = nullptr;
     llama_memory_t mem = nullptr;
     llama_batch batch = {};
+    llama_adapter_lora * adapter = nullptr;
     int n_vocab = 0;
 
     std::vector<llama_token> cached;       // seq 0 tokens in the KV cache
@@ -54,12 +55,12 @@ struct Engine::Impl {
             if (level >= GGML_LOG_LEVEL_ERROR) fputs(text, stderr);
         }, nullptr);
         if (!o.backend_dir.empty()) {
-            if (o.gpu_layers == 0) {
 #ifdef _WIN32
-                auto cpu = std::filesystem::u8path(o.backend_dir) / "ggml-cpu.dll";
-                // The pinned ggml path loader converts narrow Windows paths using the ANSI code page.
-                // Use the wide loader here so CPU-only startup also works under Unicode profiles.
-                HMODULE module = LoadLibraryW(cpu.c_str());
+            // The pinned ggml path loader uses the ANSI code page on Windows.
+            for (const auto * name : {L"ggml-cpu.dll", L"ggml-vulkan.dll"}) {
+                if (o.gpu_layers == 0 && std::wstring(name) == L"ggml-vulkan.dll") continue;
+                auto library = std::filesystem::u8path(o.backend_dir) / name;
+                HMODULE module = LoadLibraryW(library.c_str());
                 if (module) {
                     auto init = reinterpret_cast<ggml_backend_reg_t (*)()>(GetProcAddress(module, "ggml_backend_init"));
                     if (init) {
@@ -68,11 +69,13 @@ struct Engine::Impl {
                     }
                     // Backends can own worker threads; retain the module until process exit.
                 }
+            }
 #else
+            if (o.gpu_layers == 0) {
                 auto cpu = std::filesystem::path(o.backend_dir) / "libggml-cpu.so";
                 ggml_backend_load(cpu.u8string().c_str());
-#endif
             } else ggml_backend_load_all_from_path(o.backend_dir.c_str());
+#endif
         } else ggml_backend_load_all();
         auto mp = llama_model_default_params();
         mp.n_gpu_layers = o.gpu_layers;
@@ -87,7 +90,14 @@ struct Engine::Impl {
             model = llama_model_load_from_file(o.model_path.c_str(), mp);
         }
         if (!model) return;
-        if (mp.n_gpu_layers > 0 && ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU)) backend = "gpu";
+        if (mp.n_gpu_layers > 0) {
+            auto device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+            if (!device) device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
+            if (device) {
+                backend = ggml_backend_reg_name(ggml_backend_dev_backend_reg(device));
+                std::transform(backend.begin(), backend.end(), backend.begin(), [](unsigned char ch) { return (char)std::tolower(ch); });
+            }
+        }
         auto cp = llama_context_default_params();
         cp.n_ctx = 1024;
         cp.n_batch = 512;
@@ -118,6 +128,7 @@ struct Engine::Impl {
     ~Impl() {
         llama_batch_free(batch);
         if (ctx) llama_free(ctx);
+        if (adapter) llama_adapter_lora_free(adapter);
         if (model) llama_model_free(model);
     }
 
@@ -324,6 +335,24 @@ Engine::~Engine() = default;
 bool Engine::ok() const { return impl_->ctx != nullptr; }
 const std::string & Engine::model_name() const { return impl_->name; }
 const std::string & Engine::backend_name() const { return impl_->backend; }
+
+bool Engine::set_adapter(const std::string & path, std::string & error) {
+    auto & m = *impl_;
+    auto * next = path.empty() ? nullptr : llama_adapter_lora_init(m.model, path.c_str());
+    if (!path.empty() && !next) { error = "adapter_load_failed"; return false; }
+    float scale = 1.0f;
+    if (llama_set_adapters_lora(m.ctx, next ? &next : nullptr, next ? 1 : 0, next ? &scale : nullptr) != 0) {
+        if (next) llama_adapter_lora_free(next);
+        error = "adapter_apply_failed";
+        return false;
+    }
+    auto * previous = m.adapter;
+    m.adapter = next;
+    m.reset_cache();
+    m.prompt_toks.clear(); m.first_logits.clear();
+    if (previous) llama_adapter_lora_free(previous);
+    return true;
+}
 
 QueryResult Engine::query(const std::string & raw_keys, const std::string & context, const QueryOptions & options) {
     Impl & m = *impl_;

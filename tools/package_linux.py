@@ -29,11 +29,11 @@ def bundle_metadata(info):
     return info
 
 
-def offline_bundle(artifact, model, platform):
+def offline_bundle(artifact, model, platform, output_dir=None):
     spec = read_manifest(ROOT / 'models/default.json')
     verify(model, spec)
     version = (ROOT / 'VERSION').read_text().strip()
-    bundle = ROOT / 'dist' / f'beam-ime-{version}-{platform}-x86_64-offline.tar'
+    bundle = (output_dir or ROOT / 'dist') / f'beam-ime-{version}-{platform}-x86_64-offline.tar'
     bundle.parent.mkdir(exist_ok=True)
     with tarfile.open(bundle, 'w') as archive:
         for source, name in ((artifact, artifact.name), (model, spec['filename']),
@@ -47,6 +47,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--format", choices=("deb", "arch", "rpm"), required=True)
     parser.add_argument("--build", type=Path, default=ROOT / "build/release")
+    parser.add_argument("--output-dir", type=Path, default=ROOT / "dist")
     parser.add_argument("--model", type=Path, help="also make the offline bundle")
     parser.add_argument('--existing-package', type=Path, help='bundle an already built distribution package')
     args = parser.parse_args()
@@ -56,7 +57,7 @@ def main():
     if args.existing_package:
         if not args.model:
             parser.error('--existing-package requires --model')
-        print(offline_bundle(args.existing_package, args.model, platform))
+        print(offline_bundle(args.existing_package, args.model, platform, args.output_dir))
         return
     version = (ROOT / "VERSION").read_text().strip()
     # Stage on the native temporary filesystem, including when the checkout is on NTFS.
@@ -66,8 +67,8 @@ def main():
                    env={**os.environ, "DESTDIR": str(stage)}, check=True)
     stage_rime(stage / "usr/share/beam-ime/rime-data")
     shutil.copy2(ROOT / "dependencies.lock.json", stage / "usr/share/beam-ime/dependencies.lock.json")
-    dist = ROOT / "dist"
-    dist.mkdir(exist_ok=True)
+    dist = args.output_dir.resolve()
+    dist.mkdir(parents=True, exist_ok=True)
     if args.format == "deb":
         installed = subprocess.check_output(['dpkg-query', '-W',
             '-f=${binary:Package}\t${Version}\t${db:Status-Status}\n', 'librime1*'], text=True)
@@ -78,7 +79,7 @@ def main():
         (metadata / "control").write_text(
             f"Package: beam-ime\nVersion: {version.replace('-beta.', '~beta.')}\nArchitecture: amd64\n"
             "Maintainer: Beam contributors\nSection: utils\nPriority: optional\n"
-            f"Depends: fcitx5-rime, librime-plugin-lua, {abi_package} (= {abi_version}), python3, python3-yaml, libstdc++6, libc6\n"
+            f"Depends: fcitx5-rime, librime-plugin-lua, {abi_package} (= {abi_version}), python3, python3-yaml, libstdc++6, libc6, libsqlite3-0, libssl3t64\n"
             "Recommends: mesa-vulkan-drivers\nDescription: Local keys-conditioned language model input method\n")
         artifact = dist / f"beam-ime-{version}-ubuntu24.04-amd64.deb"
         normalize_permissions(stage)
@@ -121,15 +122,16 @@ def main():
             "pkgdesc = Local keys-conditioned language model input method\n"
             "url = https://github.com/IrisRainbowNeko/beam-ime\narch = x86_64\nlicense = Apache-2.0\n"
             f"size = {size}\ndepend = librime={abi}\ndepend = fcitx5-rime\ndepend = python\ndepend = python-yaml\n"
-            "depend = gcc-libs\ndepend = glibc\noptdepend = vulkan-icd-loader: GPU inference\n")
+            "depend = gcc-libs\ndepend = glibc\ndepend = sqlite\ndepend = openssl\noptdepend = vulkan-icd-loader: GPU inference\n")
         artifact = dist / f"beam-ime-{version}-arch-x86_64.pkg.tar.zst"
         normalize_permissions(stage)
         subprocess.run(["tar", "--zstd", "--owner=0", "--group=0", "-cf", str(artifact), "-C", str(stage), ".PKGINFO", "usr"], check=True)
     if args.model:
-        offline_bundle(artifact, args.model, platform)
+        offline_bundle(artifact, args.model, platform, dist)
     manifest = {"version": version, "platform": args.format, "rimeAbi": (args.build / "rime-abi.txt").read_text().strip(),
                 "artifact": artifact.name, "sha256": sha256(artifact),
                 "sourceCommit": subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                "sourceDirty": bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
                 "compiler": subprocess.check_output(['c++', '--version'], text=True).splitlines()[0],
                 "dependencies": json.loads((ROOT / 'dependencies.lock.json').read_text())}
     (dist / (artifact.name + ".build.json")).write_text(json.dumps(manifest, indent=2)+"\n")

@@ -22,7 +22,7 @@ def main():
         binary.mkdir()
         for source in args.bin.iterdir():
             if source.name in ('beamd.exe', 'ggml-base.dll', 'ggml.dll', 'ggml-cpu.dll', 'llama.dll',
-                               'rime.dll', 'beam-rime-host-test.exe'):
+                               'rime.dll', 'beam-rime-host-test.exe', 'pinyin.tsv'):
                 shutil.copy2(source, binary / source.name)
         model = root / '\u6a21\u578b test.gguf'
         model.symlink_to(args.model.resolve())

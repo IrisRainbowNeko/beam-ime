@@ -27,6 +27,9 @@ __patch:
   # Keep the user's own rime-ice tweaks (page size, bindings, ...).
   - rime_ice.custom:/patch?
   - beam_ice.custom:/patch?
+  - engine/filters/@next: beam_filter
+  - switches/@next: { name: beam_learning, states: [ 学习关闭, 学习开启 ] }
+  - switches/@next: { name: beam_learning_paused, states: [ 正常学习, 暂停学习 ] }
 
 beam:
   timeout_ms: 400   # whole request; slower replies fall back to rime-ice for that keystroke

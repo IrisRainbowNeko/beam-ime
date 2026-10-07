@@ -100,7 +100,7 @@ function Update-SchemaList($Path, [bool]$Enable) {
 function Invoke-Setup {
     if ($Action -eq 'Doctor') {
         $endpoint = Join-Path $State 'beamd.endpoint'
-        $status = @{version='0.1.0-beta.2'; weaselInstalled=[bool](Find-Weasel); running=[bool](Get-Process beamd -ErrorAction SilentlyContinue)}
+        $status = @{version='0.2.0'; weaselInstalled=[bool](Find-Weasel); running=[bool](Get-Process beamd -ErrorAction SilentlyContinue)}
         if (Test-Path -LiteralPath $endpoint) {
             try {
                 $info = Get-Content -LiteralPath $endpoint -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -200,7 +200,10 @@ function Invoke-Setup {
             Update-SchemaList (Join-Path $userDir 'default.custom.yaml') $true
             $args="--supervise --model `"$modelPath`" --log `"$State\beamd.log`""
             if ($cpuMode) { $args += ' --ngl 0' }
-            Write-AtomicJson $settingsPath @{model=$modelPath;cpu=[bool]$cpuMode}
+            $merged=@{}
+            if ($settings) { foreach ($property in $settings.PSObject.Properties) { $merged[$property.Name]=$property.Value } }
+            $merged.model=$modelPath; $merged.cpu=[bool]$cpuMode
+            Write-AtomicJson $settingsPath $merged
             New-Item $RunKey -Force | Out-Null
             New-ItemProperty $RunKey -Name BeamIME -Value "`"$InstallDir\beamd.exe`" $args" -PropertyType String -Force | Out-Null
             Invoke-Process (Join-Path $InstallDir 'beamd.exe') $args $false 0

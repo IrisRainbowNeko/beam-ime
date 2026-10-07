@@ -11,9 +11,16 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - run: sudo apt-get update && sudo apt-get install -y ninja-build nlohmann-json3-dev python3-yaml
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build nlohmann-json3-dev python3-yaml libsqlite3-dev
       - run: python3 -m pip install pypinyin==0.55.0
       - run: bash tools/build.sh tests
+  learning:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: sudo apt-get update && sudo apt-get install -y cmake ninja-build git libvulkan-dev glslc spirv-headers libsqlite3-dev libssl-dev
+      - run: python3 -m pip install numpy==2.2.6 PyYAML==6.0.2
+      - run: python3 tools/build_learning.py --jobs 2
   windows-files:
     runs-on: windows-latest
     steps:
@@ -30,7 +37,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libx11-dev libvulkan-dev glslc spirv-headers python3-yaml
+      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libx11-dev libvulkan-dev glslc spirv-headers python3-yaml libsqlite3-dev libssl-dev
       - run: python3 -m pip install pypinyin==0.55.0
       - run: bash tools/build.sh release
         env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
@@ -42,7 +49,7 @@ jobs:
     runs-on: ubuntu-24.04
     container: fedora:44
     steps:
-      - run: dnf -y --setopt=install_weak_deps=False install gcc-c++ cmake ninja-build git pkgconf-pkg-config boost-devel json-devel librime-devel librime-lua fcitx5-rime glog-devel libX11-devel vulkan-headers vulkan-loader-devel glslc spirv-headers-devel python3 python3-pyyaml python3-pip rpm-build redhat-rpm-config
+      - run: dnf -y --setopt=install_weak_deps=False install gcc-c++ cmake ninja-build git pkgconf-pkg-config boost-devel json-devel librime-devel librime-lua fcitx5-rime glog-devel libX11-devel vulkan-headers vulkan-loader-devel glslc spirv-headers-devel python3 python3-pyyaml python3-pip rpm-build redhat-rpm-config add-determinism linkdupes sqlite-devel openssl-devel
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
       - run: python3 -m pip install --break-system-packages pypinyin==0.55.0

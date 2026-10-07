@@ -27,6 +27,16 @@ void Client::fail() {
 
 std::optional<std::vector<std::string>> Client::query(const std::string & keys, const std::string & context,
                                                       int max_candidates, int beam_ms, int timeout_ms) {
+    auto reply = request({{"op", "query"}, {"keys", keys}, {"context", context},
+                          {"max", max_candidates}, {"beam_ms", beam_ms}}, timeout_ms);
+    if (!reply) return std::nullopt;
+    std::vector<std::string> out;
+    if (!reply->value("ok", false) || !reply->contains("candidates") || !(*reply)["candidates"].is_array()) return out;
+    for (const auto & value : (*reply)["candidates"]) if (value.is_string()) out.push_back(value);
+    return out;
+}
+
+std::optional<nlohmann::json> Client::request(nlohmann::json req, int timeout_ms) {
     auto now = Clock::now();
     if (now < quiet_until_) return std::nullopt;
     auto deadline = now + std::chrono::milliseconds(timeout_ms);
@@ -36,8 +46,7 @@ std::optional<std::vector<std::string>> Client::query(const std::string & keys, 
     }
 
     unsigned long long id = next_id_++;
-    nlohmann::json req = {{"id", id}, {"op", "query"}, {"keys", keys}, {"context", context},
-                          {"max", max_candidates}, {"beam_ms", beam_ms}};
+    req["id"] = id;
     if (!token_.empty()) req["token"] = token_;
     std::string line = req.dump(-1, ' ', false, nlohmann::json::error_handler_t::replace) + "\n";
     for (size_t off = 0; off < line.size();) {
@@ -59,15 +68,9 @@ std::optional<std::vector<std::string>> Client::query(const std::string & keys, 
             // A reply to an older, timed-out request: skip it and keep waiting for ours.
             if (!reply.contains("id") || !reply["id"].is_number_unsigned() || reply["id"].get<unsigned long long>() != id)
                 continue;
-            if (!reply.contains("ok") || !reply["ok"].is_boolean() || !reply["ok"].get<bool>() ||
-                !reply.contains("candidates") || !reply["candidates"].is_array()) {
-                if (reply.contains("error") && reply["error"] == "bad_token") fail();
-                return std::vector<std::string>{};
-            }
-            std::vector<std::string> out;
-            for (auto & c : reply["candidates"])
-                if (c.is_string() && !c.get<std::string>().empty()) out.push_back(c.get<std::string>());
-            return out;
+            if (!reply.contains("ok") || !reply["ok"].is_boolean()) { fail(); return std::nullopt; }
+            if (reply.value("error", "") == "bad_token") fail();
+            return reply;
         }
         int wait = remaining_ms(deadline);
         if (wait <= 0 || net::wait(socket_, 1, wait) != 1) {
@@ -81,6 +84,41 @@ std::optional<std::vector<std::string>> Client::query(const std::string & keys, 
         if (n <= 0) { fail(); return std::nullopt; }
         buffer.append(buf, (size_t) n);
         if (buffer.size() > 64 * 1024) { fail(); return std::nullopt; }
+    }
+}
+
+AsyncClient::AsyncClient(std::string path) : client_(std::move(path)), thread_([this] { run(); }) {}
+AsyncClient::~AsyncClient() {
+    { std::lock_guard<std::mutex> lock(mutex_); stopping_ = true;
+      for (auto & work : queue_) if (work.reply) work.reply->set_value(std::nullopt);
+      queue_.clear(); }
+    available_.notify_one(); thread_.join();
+}
+bool AsyncClient::enqueue(Work work) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (stopping_ || queue_.size() >= 128) { ++errors_; return false; }
+    queue_.push_back(std::move(work)); available_.notify_one(); return true;
+}
+void AsyncClient::post(nlohmann::json request) { enqueue({std::move(request), 400, {}}); }
+std::optional<nlohmann::json> AsyncClient::query(nlohmann::json request, int timeout_ms) {
+    auto reply = std::make_shared<std::promise<std::optional<nlohmann::json>>>();
+    auto future = reply->get_future();
+    if (!enqueue({std::move(request), timeout_ms, reply})) return std::nullopt;
+    if (future.wait_for(std::chrono::milliseconds(timeout_ms)) != std::future_status::ready) return std::nullopt;
+    return future.get();
+}
+void AsyncClient::run() {
+    while (true) {
+        Work work;
+        { std::unique_lock<std::mutex> lock(mutex_);
+          available_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
+          if (queue_.empty()) return;
+          work = std::move(queue_.front()); queue_.pop_front(); }
+        std::optional<nlohmann::json> reply;
+        try { reply = client_.request(work.request, work.timeout); }
+        catch (const std::exception &) { ++errors_; }
+        if (!reply || !reply->value("ok", false)) ++errors_;
+        if (work.reply) work.reply->set_value(std::move(reply));
     }
 }
 

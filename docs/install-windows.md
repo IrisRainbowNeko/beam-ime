@@ -1,6 +1,6 @@
 # Windows 11 安装
 
-下载 `Beam-0.1.0-beta.2-windows-x64-setup.exe` 或 `-offline.exe`。
+下载 `Beam-0.2.0-windows-x64-setup.exe` 或 `-offline.exe`。
 轻量版下载模型；离线版已经包含模型和小狼毫安装器。
 
 1. 运行安装器。Beam 安装在当前用户的应用目录。
@@ -49,3 +49,31 @@
 在 Windows 的应用列表卸载 Beam。卸载恢复原 DLL 和未修改的原资源，保留小狼毫、
 用户词库和模型。若恢复失败，卸载器及备份会保留，错误信息指出具体步骤。
 DLL 备份在小狼毫目录的 `beam-backup`，用户资源备份在 `%LOCALAPPDATA%\beam-ime\files`。
+## 本地个性化学习
+
+首次从 Rime 菜单打开“学习开启”，或运行开始菜单的 `Beam / Enable Learning`。
+开始菜单的 `Pause Learning` 停止新增记录与训练，`Learning Status` 显示状态。
+也可以在安装目录的终端使用以下命令：
+
+```powershell
+.\beamctl.cmd learn enable
+.\beamctl.cmd learn install -Manifest '.\beam-learning-0.2.0-windows-x86_64-vulkan.json' -Download
+# 离线导入同一组资产：
+.\beamctl.cmd learn install -Manifest '.\beam-learning-0.2.0-windows-x86_64-vulkan.json' -Source '.'
+.\beamctl.cmd learn status
+.\beamctl.cmd learn train
+.\beamctl.cmd learn pause
+.\beamctl.cmd learn resume
+.\beamctl.cmd learn disable
+.\beamctl.cmd learn rollback
+.\beamctl.cmd learn reset -Yes
+```
+
+manifest 使用下载资产中的实际文件名。QVAC 原生学习组件按当前用户安装，不需要管理员权限。
+复用已安装的 Q8 GGUF，通过 Vulkan 显卡驱动训练，无需 Python、PyTorch 或 CUDA runtime。
+离线安装需将 manifest 和一份 ZIP 放在 `-Source` 指定目录。建议训练时至少有 4 GiB 可用内存。
+默认累计 64 条新上屏记录、无 Beam 输入 5 分钟、接通电源后训练，成功任务间隔至少 4 小时。
+暂停保留已学结果，关闭会停用个性化；清空需要 `-Yes` 确认。卸载保留 `%LOCALAPPDATA%\beam-ime\learning`。
+
+没有可用 Vulkan 驱动时，训练状态显示错误，已学词库仍可使用；普通 CPU 推理不受影响。
+从旧版 Python 学习组件升级时，安装新的 Vulkan manifest。已有适配器可继续使用，下一轮建立原生优化器状态。

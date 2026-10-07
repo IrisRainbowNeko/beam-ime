@@ -16,6 +16,7 @@ cmake -S "$root" -B "$W/b/ime" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$T" -DBEAM_WIN_P
 cmake --build "$W/b/ime" >> "$W/b-beamd.log" 2>&1
 mkdir -p "$W/out"
 cp "$W/b/ime/bin/beamd.exe" "$W/b/ime/bin/"*.dll "$W/out/"
+cp "$W/b/ime/data/pinyin.tsv" "$W/out/"
 mkdir -p "$W/symbols"
 for binary in "$W/out/beamd.exe" "$W/out/"ggml*.dll "$W/out/llama.dll"; do
   ${TRIPLE}-objcopy --only-keep-debug "$binary" "$W/symbols/$(basename "$binary").debug"

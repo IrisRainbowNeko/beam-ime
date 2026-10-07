@@ -32,5 +32,29 @@ try {
     if ($e) { throw ($e | Out-String) }
     [void][Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot '../packaging/windows/beam-stop.ps1'),[ref]$t,[ref]$e)
     if ($e) { throw ($e | Out-String) }
+    . (Join-Path $PSScriptRoot '../packaging/windows/beamctl.ps1')
+    $state=Join-Path $root 'learning state'
+    $Source=$root
+    $Manifest=Join-Path $root 'learning.json'
+    $archive=Join-Path $root 'runtime.zip'
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $zip=[IO.Compression.ZipFile]::Open($archive,[IO.Compression.ZipArchiveMode]::Create)
+    $longName=('long_directory/'*18)+'data.txt'
+    try {
+        foreach ($name in @('component.json',$longName)) {
+            $writer=New-Object IO.StreamWriter($zip.CreateEntry($name).Open())
+            try { $writer.Write($(if ($name -eq 'component.json') {'{"schemaVersion":2,"base_sha256":"test","backend":"vulkan"}'} else {'long path'})) }
+            finally { $writer.Dispose() }
+        }
+    } finally { $zip.Dispose() }
+    @{schemaVersion=2; platform='windows-x86_64';backend='vulkan';base_sha256='test';assets=@(@{
+        filename='runtime.zip';size=(Get-Item -LiteralPath $archive).Length;sha256=(Get-FileHash -LiteralPath $archive).Hash.ToLower()
+    })} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Manifest -Encoding UTF8
+    $installed=Install-LearningComponent
+    if (-not (Test-Path -LiteralPath $installed)) { throw 'learning component was not installed' }
+    Add-Type 'public static class BeamTestPath { [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern uint GetFileAttributesW(string path); }'
+    $longPath='\\?\'+(Join-Path (Split-Path $installed) ($longName.Replace('/','\')))
+    if ([BeamTestPath]::GetFileAttributesW($longPath) -eq [uint32]::MaxValue) { throw 'long-path asset was not extracted' }
+    if ((Install-LearningComponent) -ne $installed) { throw 'learning install is not idempotent' }
     Write-Host 'Windows file transaction tests passed.'
-} finally { Remove-Item -LiteralPath $root -Recurse -Force }
+} finally { & cmd.exe /d /c "rmdir /s /q `"\\?\$root`"" }

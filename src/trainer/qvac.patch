@@ -1,0 +1,286 @@
+diff --git a/ggml/include/ggml-opt.h b/ggml/include/ggml-opt.h
+index 710fb40..7bfd03a 100644
+--- a/ggml/include/ggml-opt.h
++++ b/ggml/include/ggml-opt.h
+@@ -126,6 +126,9 @@ extern "C" {
+     // casts userdata to ggml_opt_optimizer_params and returns it
+     GGML_API struct ggml_opt_optimizer_params ggml_opt_get_constant_optimizer_params(void * userdata);
+ 
++    typedef struct ggml_tensor * (*ggml_opt_loss_builder)(
++        struct ggml_context *, struct ggml_tensor *, struct ggml_tensor *, struct ggml_tensor *, void *);
++
+     // parameters for initializing a new optimization context
+     struct ggml_opt_params {
+         ggml_backend_sched_t backend_sched; // defines which backends are used to construct the compute graphs
+@@ -151,6 +154,9 @@ extern "C" {
+         // loss*loss_scale so gradient magnitudes stay within fp32 range through deep
+         // backprop.
+         float loss_scale;
++        ggml_opt_loss_builder build_loss;
++        void * loss_userdata;
++        float max_grad_norm;
+     };
+ 
+     // get parameters for an optimization context with defaults set where possible
+diff --git a/ggml/src/ggml-cpu/ops.cpp b/ggml/src/ggml-cpu/ops.cpp
+index 7f1be16..7b85d1c 100644
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -6302,10 +6302,10 @@ static void ggml_compute_forward_soft_max_ext_back_f32(
+         // linear runtime, no additional memory
+         float dot_y_dy = 0;
+         ggml_vec_dot_f32  (nc, &dot_y_dy, 0, y, 0, dy, 0, 1);
+-        ggml_vec_cpy_f32  (nc, dx, dy);
+-        ggml_vec_acc1_f32 (nc, dx, -dot_y_dy);
+-        ggml_vec_mul_f32  (nc, dx, dx, y);
+-        ggml_vec_scale_f32(nc, dx, scale);
++        // The allocator can reuse either input, including y, for dx.
++        for (int i = 0; i < nc; ++i) {
++            dx[i] = scale * y[i] * (dy[i] - dot_y_dy);
++        }
+ 
+ #ifndef NDEBUG
+         for (int i = 0; i < nc; ++i) {
+diff --git a/ggml/src/ggml-opt.cpp b/ggml/src/ggml-opt.cpp
+index dfe0529..48e3a83 100644
+--- a/ggml/src/ggml-opt.cpp
++++ b/ggml/src/ggml-opt.cpp
+@@ -70,6 +70,9 @@ struct ggml_opt_context {
+     // Backward loss scale: the backward is seeded from loss*loss_scale so gradient
+     // magnitudes stay within fp32 range through deep backprop.
+     float   loss_scale         = 1.0f;
++    ggml_opt_loss_builder build_loss = nullptr;
++    void * loss_userdata = nullptr;
++    float max_grad_norm = 0.0f;
+ 
+     ggml_opt_get_optimizer_params get_opt_pars    = nullptr;
+     void *                        get_opt_pars_ud = nullptr;
+@@ -331,6 +334,9 @@ struct ggml_opt_params ggml_opt_default_params(
+         /*get_opt_pars_ud =*/ nullptr,
+         /*optimizer       =*/ GGML_OPT_OPTIMIZER_TYPE_ADAMW,
+         /*loss_scale      =*/ 1.0f,
++        /*build_loss      =*/ nullptr,
++        /*loss_userdata   =*/ nullptr,
++        /*max_grad_norm   =*/ 0.0f,
+     };
+ }
+ 
+@@ -521,6 +527,10 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
+             break;
+         }
+     }
++    if (opt_ctx->build_loss) {
++        opt_ctx->loss = opt_ctx->build_loss(ctx_results, opt_ctx->outputs, opt_ctx->labels,
++                                           opt_ctx->masks, opt_ctx->loss_userdata);
++    }
+     ggml_set_output(opt_ctx->loss);
+ 
+     struct ggml_tensor * loss_for_backward = opt_ctx->loss;
+@@ -572,6 +582,7 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
+             ggml_tensor * node = opt_ctx->gf->nodes[i];
+             if ((accumulate && (node->flags & GGML_TENSOR_FLAG_PARAM)) || (node->flags & GGML_TENSOR_FLAG_LOSS)) {
+                 opt_ctx->grad_accs[i] = ggml_new_tensor(opt_ctx->ctx_static, GGML_TYPE_F32, GGML_MAX_DIMS, node->ne);
++                ggml_format_name(opt_ctx->grad_accs[i], "Gradient for %s", node->name);
+             } else {
+                 opt_ctx->grad_accs[i] = nullptr;
+             }
+@@ -616,11 +627,28 @@ static void ggml_opt_build(ggml_opt_context_t opt_ctx) {
+     ggml_set_input(adamw_params);
+     const char * optimizer_name = ggml_opt_optimizer_name(opt_ctx->optimizer);
+     ggml_format_name(adamw_params, "%s_params", optimizer_name);
++    struct ggml_tensor * gradient_scale = nullptr;
++    if (opt_ctx->max_grad_norm > 0.0f) {
++        struct ggml_tensor * squared_norm = nullptr;
++        for (int i = 0; i < opt_ctx->gf->n_nodes; ++i) {
++            auto * node = opt_ctx->gb_opt->nodes[i];
++            auto * grad = ggml_graph_get_grad(opt_ctx->gb_opt, node);
++            if (grad && (node->flags & GGML_TENSOR_FLAG_PARAM)) {
++                auto * squared = ggml_sum(opt_ctx->ctx_compute, ggml_sqr(opt_ctx->ctx_compute, grad));
++                squared_norm = squared_norm ? ggml_add(opt_ctx->ctx_compute, squared_norm, squared) : squared;
++            }
++        }
++        auto * norm = ggml_sqrt(opt_ctx->ctx_compute, squared_norm);
++        auto * denominator = ggml_clamp(opt_ctx->ctx_compute, norm, opt_ctx->max_grad_norm, INFINITY);
++        gradient_scale = ggml_div(opt_ctx->ctx_compute,
++            ggml_scale_bias(opt_ctx->ctx_compute, norm, 0.0f, opt_ctx->max_grad_norm), denominator);
++    }
+     for (int i = opt_ctx->gf->n_nodes-1; i >= 0; --i) {
+         struct ggml_tensor * node = opt_ctx->gb_opt->nodes[i];
+         struct ggml_tensor * grad = ggml_graph_get_grad(opt_ctx->gb_opt, node);
+ 
+         if (grad && (node->flags & GGML_TENSOR_FLAG_PARAM)) {
++            if (gradient_scale) grad = ggml_mul(opt_ctx->ctx_compute, grad, gradient_scale);
+             struct ggml_tensor * m = nullptr;
+             struct ggml_tensor * v = nullptr;
+             if (need_momenta) {
+@@ -664,6 +692,9 @@ ggml_opt_context_t ggml_opt_init(struct ggml_opt_params params) {
+     result->inputs           = params.inputs;
+     result->outputs          = params.outputs;
+     result->opt_period       = params.opt_period;
++    result->build_loss       = params.build_loss;
++    result->loss_userdata    = params.loss_userdata;
++    result->max_grad_norm    = params.max_grad_norm;
+     result->get_opt_pars     = params.get_opt_pars;
+     result->get_opt_pars_ud  = params.get_opt_pars_ud;
+     result->optimizer        = params.optimizer;
+@@ -974,6 +1005,11 @@ void ggml_opt_eval(ggml_opt_context_t opt_ctx, ggml_opt_result_t result) {
+     opt_ctx->iter += opt_ctx->allocated_graph == opt_ctx->gb_opt;
+     opt_ctx->opt_i = (opt_ctx->opt_i + 1) % opt_ctx->opt_period;
+ 
++    if (!opt_ctx->static_graphs && opt_ctx->allocated_graph == opt_ctx->gb_opt) {
++        // Reset before discarding the dynamic backward graph.
++        ggml_graph_reset(opt_ctx->gb_grad);
++    }
++
+     if (!opt_ctx->static_graphs) {
+         opt_ctx->gf                   = nullptr;
+         opt_ctx->gb_grad              = nullptr;
+@@ -1276,6 +1312,8 @@ bool ggml_opt_save_state(ggml_opt_context_t opt_ctx, const char* filename) {
+     gguf_set_val_i64(gguf_ctx, "optimizer.iteration", ggml_opt_get_iter(opt_ctx));
+     gguf_set_val_i32(gguf_ctx, "optimizer.n_params", ggml_opt_get_nparams(opt_ctx));
+     gguf_set_val_f32(gguf_ctx, "optimizer.loss_scale", opt_ctx->loss_scale);
++    gguf_set_val_i32(gguf_ctx, "optimizer.accumulation_index", opt_ctx->opt_i);
++    gguf_set_val_i32(gguf_ctx, "optimizer.accumulation_steps", opt_ctx->opt_period);
+ 
+     int32_t total_params = ggml_opt_get_nparams(opt_ctx);
+ 
+@@ -1290,6 +1328,10 @@ bool ggml_opt_save_state(ggml_opt_context_t opt_ctx, const char* filename) {
+         }
+     }
+ 
++    for (auto * gradient : opt_ctx->grad_accs) {
++        if (gradient) gguf_add_tensor(gguf_ctx, gradient);
++    }
++
+     bool success = gguf_write_to_file(gguf_ctx, filename, false);
+     gguf_free(gguf_ctx);
+ 
+@@ -1317,6 +1359,19 @@ bool ggml_opt_load_state(ggml_opt_context_t opt_ctx, const char* filename) {
+         ggml_opt_set_iter(opt_ctx, saved_iter);
+     }
+ 
++    const int period_key = gguf_find_key(gguf_context, "optimizer.accumulation_steps");
++    const int index_key = gguf_find_key(gguf_context, "optimizer.accumulation_index");
++    if (period_key < 0 || index_key < 0 ||
++        gguf_get_val_i32(gguf_context, period_key) != opt_ctx->opt_period) {
++        gguf_free(gguf_context);
++        return false;
++    }
++    opt_ctx->opt_i = gguf_get_val_i32(gguf_context, index_key);
++    if (opt_ctx->opt_i < 0 || opt_ctx->opt_i >= opt_ctx->opt_period) {
++        gguf_free(gguf_context);
++        return false;
++    }
++
+     gguf_free(gguf_context);
+     return true;
+ }
+@@ -1405,7 +1460,20 @@ bool ggml_opt_load_tensors(ggml_opt_context_t opt_ctx, const char* filename) {
+ 
+     }
+ 
++    int gradients_loaded = 0, gradients_expected = 0;
++    for (auto * gradient : opt_ctx->grad_accs) {
++        if (!gradient) continue;
++        ++gradients_expected;
++        auto * saved = ggml_get_tensor(gguf_ctx, gradient->name);
++        if (saved && saved->type == gradient->type && ggml_are_same_shape(saved, gradient)) {
++            ggml_backend_tensor_set(gradient, saved->data, 0, ggml_nbytes(gradient));
++            ++gradients_loaded;
++        }
++    }
++    int moments_expected = 0;
++    for (auto * moment : opt_ctx->grad_m) moments_expected += moment != nullptr;
+     ggml_free(gguf_ctx);
+     gguf_free(gguf_context);
+-    return (grad_m_loaded > 0 || grad_v_loaded > 0);
++    return grad_m_loaded == moments_expected && grad_v_loaded == moments_expected &&
++           gradients_loaded == gradients_expected && gradients_expected > 0;
+ }
+diff --git a/include/llama.h b/include/llama.h
+index cbd9207..94e0293 100644
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -1646,6 +1646,12 @@ extern "C" {
+         bool load_optimizer_state;          // whether to load optimizer state from checkpoint_path
+ 
+         bool assistant_loss_only;
++        int32_t accumulation_steps;
++        float max_grad_norm;
++        ggml_opt_loss_builder build_loss;
++        void * loss_userdata;
++        void (*prepare_batch)(ggml_opt_context_t, int64_t, void *);
++        void * batch_userdata;
+     };
+ 
+     LLAMA_API struct llama_opt_params llama_opt_default_params(void);
+diff --git a/src/llama-context.cpp b/src/llama-context.cpp
+index dfbb380..90aab13 100644
+--- a/src/llama-context.cpp
++++ b/src/llama-context.cpp
+@@ -3451,6 +3451,12 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
+ 
+     ggml_opt_params opt_params = ggml_opt_default_params(sched.get(), opt_loss_type);
+     opt_params.opt_period      = n_batch / n_ubatch;
++    if (lopt_params.accumulation_steps > 0) opt_params.opt_period = lopt_params.accumulation_steps;
++    opt_params.build_loss = lopt_params.build_loss;
++    opt_params.loss_userdata = lopt_params.loss_userdata;
++    opt_params.max_grad_norm = lopt_params.max_grad_norm;
++    opt_prepare_batch = lopt_params.prepare_batch;
++    opt_batch_userdata = lopt_params.batch_userdata;
+     opt_params.get_opt_pars    = lopt_params.get_opt_pars;
+     opt_params.get_opt_pars_ud = lopt_params.get_opt_pars_ud;
+     opt_params.optimizer       = lopt_params.optimizer_type;
+@@ -3511,7 +3517,7 @@ void llama_context::opt_init(struct llama_model * model, struct llama_opt_params
+             should_load_optimizer_tensors = true;
+             optimizer_tensors_loaded = false;
+         } else {
+-            LLAMA_LOG_ERROR("Failed to load optimizer state from: %s\n", lopt_params.checkpoint_path);
++            throw std::runtime_error("Failed to load optimizer state");
+         }
+     }
+ }
+@@ -3618,7 +3624,7 @@ void llama_context::opt_epoch_iter(
+                     LLAMA_LOG_INFO("Successfully loaded optimizer state tensor data\n");
+                     optimizer_tensors_loaded = true;
+                 } else {
+-                    LLAMA_LOG_ERROR("Failed to load optimizer tensor data\n");
++                    throw std::runtime_error("Failed to load optimizer tensors");
+                 }
+                 should_load_optimizer_tensors = false;  // Only try once
+             }
+@@ -3666,6 +3672,8 @@ void llama_context::opt_epoch_iter(
+                     ggml_backend_sched_synchronize(get_sched());
+                 }
+             }
++            if (opt_prepare_batch) opt_prepare_batch(opt_ctx,
++                idata_in_loop + (pos_ctx + pos_batch) / n_ubatch, opt_batch_userdata);
+             ggml_opt_eval(opt_ctx, result);
+             if (callback) {
+                 callback(train, opt_ctx, dataset, result, idata_in_loop + (pos_ctx + pos_batch)/n_ubatch + 1, ndata_in_loop, t_loop_start);
+@@ -4543,6 +4551,12 @@ struct llama_opt_params llama_opt_default_params(void) {
+         /*checkpoint_path      =*/ nullptr,
+         /*load_optimizer_state =*/ false,
+         /*assistant_loss_only  =*/ false,
++        /*accumulation_steps   =*/ 0,
++        /*max_grad_norm        =*/ 0.0f,
++        /*build_loss           =*/ nullptr,
++        /*loss_userdata        =*/ nullptr,
++        /*prepare_batch        =*/ nullptr,
++        /*batch_userdata       =*/ nullptr,
+     };
+ }
+ 
+diff --git a/src/llama-context.h b/src/llama-context.h
+index edc02be..295ac24 100644
+--- a/src/llama-context.h
++++ b/src/llama-context.h
+@@ -381,6 +381,8 @@ private:
+ 
+     // training
+     ggml_opt_context_t opt_ctx = nullptr;
++    void (*opt_prepare_batch)(ggml_opt_context_t, int64_t, void *) = nullptr;
++    void * opt_batch_userdata = nullptr;
+     uint32_t original_n_ctx_train = 0;
+ 
+     // optimizer state loading (deferred until after ggml_opt_build)

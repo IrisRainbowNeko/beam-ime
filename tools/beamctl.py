@@ -20,13 +20,22 @@ else:
 from beamlib.model import read_manifest, install
 from beamlib.config import atomic_write, schema_entry
 from beamlib.files import install_files, restore_files
+from beamlib.learning import install_component
 
 
 def data_dir():
+    if os.name == 'nt':
+        return Path(os.environ['LOCALAPPDATA']) / 'beam-ime'
     return Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "beam-ime"
 
 
 def query(request):
+    if os.name == 'nt':
+        endpoint = json.loads((data_dir() / 'beamd.endpoint').read_text(encoding='utf-8-sig'))
+        with socket.create_connection(('127.0.0.1', endpoint['port']), timeout=10) as connection:
+            connection.sendall((json.dumps({'id': 1, 'token': endpoint['token'], **request}) + '\n').encode())
+            with connection.makefile('rb') as stream:
+                return json.loads(stream.readline(65537))
     endpoint = os.environ.get("BEAM_SOCKET", f"{os.environ.get('XDG_RUNTIME_DIR', '/tmp/beam-ime-' + str(os.getuid()))}/beam-ime/beamd.sock")
     if not os.environ.get("XDG_RUNTIME_DIR") and not os.environ.get("BEAM_SOCKET"):
         endpoint = f"/tmp/beam-ime-{os.getuid()}/beamd.sock"
@@ -59,14 +68,34 @@ def main():
     candidate = commands.add_parser("query")
     candidate.add_argument("keys")
     candidate.add_argument("--context", default="")
+    learn = commands.add_parser('learn')
+    learn.add_argument('action', choices=('enable', 'disable', 'pause', 'resume', 'status', 'train', 'rollback', 'reset', 'install'))
+    learn.add_argument('--yes', action='store_true', help='confirm erasing learning data')
+    learn.add_argument('--manifest', type=Path)
+    learn.add_argument('--source', type=Path, help='directory containing offline learning assets')
+    learn.add_argument('--download', action='store_true')
     args = parser.parse_args()
+    if args.command == 'learn':
+        request = {'op': 'learning', 'action': args.action}
+        if args.action == 'reset':
+            if not args.yes:
+                parser.error('reset deletes personal learning data; repeat with --yes to confirm')
+            request['confirm'] = True
+        if args.action == 'install':
+            if not args.manifest:
+                parser.error('install requires --manifest pointing to the learning component release manifest')
+            component = install_component(args.manifest, data_dir() / 'trainer', args.source, args.download)
+            request['manifest'] = str(component)
+        result = query(request)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get('ok') else 1
     if args.command in {"setup", "disable", "model-install"} and os.geteuid() == 0:
         parser.error("run this command as your desktop user, without sudo")
     if args.command == "model-install":
         spec = read_manifest(args.manifest)
         print(install(spec, data_dir() / "models" / spec["filename"], args.source, args.download))
     elif args.command == "doctor":
-        result = {"version": "0.1.0-beta.2", "platform": sys.platform, "modelInstalled": (data_dir() / "models/beam-0.6b-q8_0.gguf").exists()}
+        result = {"version": "0.2.0", "platform": sys.platform, "modelInstalled": (data_dir() / "models/beam-0.6b-q8_0.gguf").exists()}
         try:
             result["service"] = query({"op": "health"})
         except (OSError, ValueError):
@@ -126,7 +155,7 @@ def main():
         except Exception:
             restore_files(data_dir() / "installed-files")
             raise
-        atomic_write(settings_path, json.dumps({"model": str(model_path.resolve()), "cpu": args.cpu or previous.get("cpu", False)}).encode())
+        atomic_write(settings_path, json.dumps({**previous, "model": str(model_path.resolve()), "cpu": args.cpu or previous.get("cpu", False)}).encode())
         unit = "[Unit]\nDescription=Beam IME\nAfter=graphical-session.target\n\n[Service]\nExecStart=/usr/bin/beamctl run\nRestart=on-failure\nRestartSec=3\n\n[Install]\nWantedBy=default.target\n"
         atomic_write(unit_dir / "beam-ime.service", unit.encode())
         service("daemon-reload")

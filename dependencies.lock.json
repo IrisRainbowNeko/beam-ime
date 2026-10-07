@@ -1,4 +1,6 @@
 {
+  "qvac-trainer": {"revision": "2633d8d8cab160906601eeb9e3d29a4a12da88cc", "source": "https://codeload.github.com/tetherto/qvac-fabric-llm.cpp/tar.gz/2633d8d8cab160906601eeb9e3d29a4a12da88cc", "sha256": "73ada05d8933460aca75e6122a3e4822fd648742a285bde611e17eaebc76e21f", "patch": "src/trainer/qvac.patch", "backend": "vulkan"},
+  "sqlite-windows": {"version": "3.46.1", "url": "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip", "sha256": "77823cb110929c2bcb0f5d48e4833b5c59a8a6e40cdea3936b99e199dbbe5784"},
   "llama.cpp": {"revision": "05af0d2b1398394cfa67e1918fee7feabccaa9bc", "source": "https://github.com/ggml-org/llama.cpp"},
   "nlohmann-json": {"revision": "55f93686c01528224f448c19128836e7df245f72", "source": "https://github.com/nlohmann/json"},
   "windows-librime": {"version": "1.13.1", "revision": "1c23358157934bd6e6d6981f0c0164f05393b497", "source": "https://github.com/rime/librime"},

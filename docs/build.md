@@ -6,7 +6,7 @@ C++17、CMake 3.24+、Ninja。依赖版本见 `dependencies.lock.json`。
 ## Arch
 
 ```sh
-sudo pacman -S --needed base-devel cmake ninja git boost nlohmann-json librime fcitx5-rime vulkan-headers vulkan-icd-loader shaderc spirv-headers python python-yaml python-pip
+sudo pacman -S --needed base-devel cmake ninja git boost nlohmann-json librime fcitx5-rime vulkan-headers vulkan-icd-loader shaderc spirv-headers python python-yaml python-pip sqlite openssl
 python -m venv --system-site-packages .venv
 source .venv/bin/activate
 python -m pip install pypinyin==0.55.0
@@ -17,7 +17,7 @@ python tools/package_linux.py --format arch --model models/beam-0.6b-q8_0.gguf
 ## Ubuntu 24.04
 
 ```sh
-sudo apt install build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libx11-dev libvulkan-dev glslc spirv-headers python3-yaml python3-pip
+sudo apt install build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libx11-dev libvulkan-dev glslc spirv-headers python3-yaml python3-pip libsqlite3-dev libssl-dev
 python3 -m pip install --break-system-packages pypinyin==0.55.0
 bash tools/build.sh release
 python3 tools/package_linux.py --format deb --model models/beam-0.6b-q8_0.gguf
@@ -26,7 +26,7 @@ python3 tools/package_linux.py --format deb --model models/beam-0.6b-q8_0.gguf
 ## Fedora 44
 
 ```sh
-sudo dnf install gcc-c++ cmake ninja-build git pkgconf-pkg-config boost-devel json-devel librime-devel librime-lua fcitx5-rime glog-devel libX11-devel vulkan-headers vulkan-loader-devel glslc spirv-headers-devel python3 python3-pyyaml python3-pip rpm-build redhat-rpm-config
+sudo dnf install gcc-c++ cmake ninja-build git pkgconf-pkg-config boost-devel json-devel librime-devel librime-lua fcitx5-rime glog-devel libX11-devel vulkan-headers vulkan-loader-devel glslc spirv-headers-devel python3 python3-pyyaml python3-pip rpm-build redhat-rpm-config add-determinism linkdupes sqlite-devel openssl-devel
 python3 -m venv --system-site-packages .venv
 source .venv/bin/activate
 python3 -m pip install pypinyin==0.55.0

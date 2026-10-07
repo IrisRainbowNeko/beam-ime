@@ -32,3 +32,23 @@ Linux 使用用户私有 Unix socket，默认 `$XDG_RUNTIME_DIR/beam-ime/beamd.s
 `models/default.json` 是模型版本的唯一发行信息，包含文件名、大小、SHA-256、下载地址、
 基座、prompt 版本和量化。Linux 和 Windows 安装器均先写临时文件，完成校验后再替换目标。
 自定义兼容模型可通过 Linux setup 的 `--model` 或手动调整 Windows 启动参数使用。
+## 本地学习接口
+
+JSON-lines 协议仍为 v1，`query.candidates` 保持字符串数组。新响应附带同序 `sources`
+（`model` 或 `personal`）、`personalization_revision`、`learning_enabled` 和 `learning_paused`。
+`health.learning` 返回状态、样本计数、训练进度与适配器元数据，不返回训练文本。
+
+- `composition`：`session`、`composition`、`state`（`begin/activity/end/cancel`）。连接断开会结束其活跃组词。
+- `feedback`：`session`、`composition`、`event_id`、`keys`、`text`，可附 `context`、`first` 和 `parts:[{keys,text,first}]`。
+  只在实际提交时发送。事件 ID 去重，关闭或暂停时不采集，取消的片段不产生反馈。
+- `learning`：`action` 为 `enable/disable/pause/resume/status/train/rollback/reset/install`；
+  `reset` 需要 `confirm:true`，`install` 提供本机已安装组件的 `manifest` 路径。
+
+上屏反馈与查询共用后台顺序连接，UI 线程不做网络写入或数据库操作。daemon 是 SQLite 唯一写入者。
+训练进程读取固定任务快照，使用文件发布进度和产物；输入活动请求 microbatch 边界暂停。
+适配器仅在活跃组词全部结束后切换，并清空 KV、推测草稿和前端组词缓存。
+每个基座保存当前及上一套适配器和优化器状态，模型升级按基座指纹隔离。
+
+个人词库的 SQLite 记录在启动时建立音节前缀索引，查询只匹配相关拼音路径；原始按键有独立的精确索引。
+候选保持非负原序分数，叠加频次、近期性和上下文相似度，同码纠正仅作用于对应按键。
+最终过滤器保留原有 Rime 候选对象与片段范围，首屏为个人词和普通词留位，后续候选继续翻页。

@@ -28,22 +28,24 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", type=Path, default=ROOT/"models/beam-0.6b-q8_0.gguf")
     parser.add_argument("--light-only", action="store_true")
+    parser.add_argument("--build", type=Path, default=ROOT/"build/win", help="cross-build root containing out/ and symbols/")
+    parser.add_argument("--output-dir", type=Path, default=ROOT/"dist")
     args = parser.parse_args()
     version = (ROOT/"VERSION").read_text().strip()
     lock = json.loads((ROOT/"dependencies.lock.json").read_text())
-    stage = ROOT/"build/windows-package"
-    if stage.exists(): shutil.rmtree(stage)
-    stage.mkdir(parents=True)
+    temporary = tempfile.TemporaryDirectory(prefix='beam-windows-package-')
+    stage = Path(temporary.name)
     (stage/"payload").mkdir()
     (stage/"models").mkdir()
-    output = ROOT/"build/win/out"
+    output = args.build/"out"
     for file in output.glob("*"):
         if file.suffix.lower() in (".dll", ".exe") and not file.name.endswith('-test.exe'):
             shutil.copy2(file, stage/("payload/rime.dll" if file.name == "rime.dll" else file.name))
     if not (stage/"beamd.exe").exists() or not (stage/"payload/rime.dll").exists():
         raise ValueError("build the rime and beamd targets first")
-    for name in ("beam-setup.ps1", "beam-stop.ps1", "Beam.Files.psm1"):
+    for name in ("beam-setup.ps1", "beam-stop.ps1", "Beam.Files.psm1", "beamctl.ps1", "beamctl.cmd"):
         shutil.copy2(ROOT/"packaging/windows"/name, stage/name)
+    shutil.copy2(output/'pinyin.tsv', stage/'pinyin.tsv')
     shutil.copy2(ROOT/"models/default.json", stage/"models/default.json")
     shutil.copy2(ROOT/"dependencies.lock.json", stage/"dependencies.lock.json")
     shutil.copytree(ROOT/"licenses", stage/"licenses")
@@ -59,10 +61,11 @@ def main():
         nsis = lock["nsis"]
         archive = downloads/f"nsis-{nsis['version']}.zip"
         fetch(f"https://downloads.sourceforge.net/project/nsis/NSIS%203/{nsis['version']}/{archive.name}", archive, nsis["sha256"])
-        with zipfile.ZipFile(archive) as package: package.extractall(downloads)
         maker = str(downloads/f"nsis-{nsis['version']}/makensis.exe")
-    dist = ROOT/"dist"
-    dist.mkdir(exist_ok=True)
+        if not Path(maker).exists():
+            with zipfile.ZipFile(archive) as package: package.extractall(downloads)
+    dist = args.output_dir.resolve()
+    dist.mkdir(parents=True, exist_ok=True)
     wine_prefix = tempfile.TemporaryDirectory(prefix='beam-nsis-') if wine else None
     environment = {**os.environ, 'WINEDEBUG': '-all'}
     if wine_prefix:
@@ -82,6 +85,7 @@ def main():
         info = {"version": version, "platform": "windows-x64", "artifact": artifact.name,
                 "sha256": sha256(artifact), "dependencies": lock,
                 "sourceCommit": subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip(),
+                "sourceDirty": bool(subprocess.check_output(['git', 'status', '--porcelain'], cwd=ROOT, text=True).strip()),
                 "compiler": subprocess.check_output(['x86_64-w64-mingw32-g++', '--version'], text=True).splitlines()[0]}
         (dist / (artifact.name + '.build.json')).write_text(json.dumps(info, indent=2) + '\n')
         print(artifact)
@@ -97,7 +101,7 @@ def main():
             fetch(lock["weasel"]["url"], weasel, lock["weasel"]["sha256"])
             shutil.copy2(weasel, stage/"payload/weasel-installer.exe")
             build(True)
-        symbols = ROOT / 'build/win/symbols'
+        symbols = args.build / 'symbols'
         if symbols.exists():
             with zipfile.ZipFile(dist/f'Beam-{version}-windows-x64-symbols.zip', 'w', zipfile.ZIP_DEFLATED) as archive:
                 for file in sorted(symbols.glob('*.debug')):
@@ -107,6 +111,7 @@ def main():
             subprocess.run(['wineserver', '-k'], env=environment, check=False)
             subprocess.run(['wineserver', '-w'], env=environment, check=False, timeout=30)
             wine_prefix.cleanup()
+        temporary.cleanup()
 
 
 if __name__ == "__main__": main()

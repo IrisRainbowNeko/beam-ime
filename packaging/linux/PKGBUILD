@@ -1,14 +1,14 @@
 pkgname=beam-ime
-pkgver=0.1.0beta2
+pkgver=0.2.0
 pkgrel=1
 pkgdesc='Local keys-conditioned language model input method'
 arch=('x86_64')
 url='https://github.com/IrisRainbowNeko/beam-ime'
 license=('Apache-2.0')
-depends=('fcitx5-rime' 'librime' 'python' 'python-yaml' 'gcc-libs')
+depends=('fcitx5-rime' 'librime' 'python' 'python-yaml' 'gcc-libs' 'sqlite' 'openssl')
 makedepends=('cmake' 'ninja' 'git' 'boost' 'nlohmann-json' 'vulkan-headers' 'vulkan-icd-loader' 'shaderc' 'spirv-headers' 'python-pip')
 optdepends=('vulkan-radeon: AMD GPU acceleration' 'vulkan-intel: Intel GPU acceleration')
-source=("beam-ime::git+https://github.com/IrisRainbowNeko/beam-ime.git#tag=v0.1.0-beta.2")
+source=("beam-ime::git+https://github.com/IrisRainbowNeko/beam-ime.git#tag=v0.2.0")
 sha256sums=('SKIP')
 prepare() {
   python -m venv --system-site-packages "$srcdir/test-env"

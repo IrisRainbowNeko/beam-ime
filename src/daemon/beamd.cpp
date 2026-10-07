@@ -17,6 +17,7 @@
 #include "engine.hpp"
 #include "net.hpp"
 #include "protocol.hpp"
+#include "runtime.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -45,6 +46,7 @@ constexpr size_t kMaxLine = 64 * 1024;
 struct Client {
     beam::net::Socket socket;
     std::string buffer;
+    uint64_t owner;
 };
 
 bool send_line(beam::net::Socket s, const json & reply) {
@@ -90,7 +92,7 @@ bool redirect_log(const std::string & path) {
 
 int beamd_main(int argc, char ** argv) {
     beam::EngineOptions options;
-    std::string socket_path, log_path;
+    std::string socket_path, log_path, learning_directory, data_directory;
     int beam_ms = 150;
     bool verbose = false, debug_text = false;
     for (int i = 1; i < argc; ++i) {
@@ -103,6 +105,8 @@ int beamd_main(int argc, char ** argv) {
         else if (a == "--version") { printf("%s\n", BEAM_VERSION); return 0; }
         else if (a == "--backend-dir") options.backend_dir = value();
         else if (a == "--socket") socket_path = value();
+        else if (a == "--learning-dir") learning_directory = value();
+        else if (a == "--data-dir") data_directory = value();
         else if (a == "--ngl") options.gpu_layers = std::atoi(value().c_str());
         else if (a == "--threads") options.threads = std::atoi(value().c_str());
         else if (a == "--beam-ms") beam_ms = std::atoi(value().c_str());
@@ -114,8 +118,7 @@ int beamd_main(int argc, char ** argv) {
     if (!log_path.empty() && !redirect_log(log_path)) fprintf(stderr, "cannot open log %s\n", log_path.c_str());
     setvbuf(stderr, nullptr, _IONBF, 0);
     if (options.model_path.empty()) { usage(); return 2; }
-    if (options.backend_dir.empty()) {
-        std::filesystem::path executable;
+    std::filesystem::path executable;
 #ifdef _WIN32
         wchar_t module[32768];
         DWORD length = GetModuleFileNameW(nullptr, module, 32768);
@@ -125,9 +128,16 @@ int beamd_main(int argc, char ** argv) {
         executable = std::filesystem::read_symlink("/proc/self/exe", ec);
         if (ec) executable = std::filesystem::absolute(argv[0]);
 #endif
+    if (options.backend_dir.empty()) {
         auto dir = executable.parent_path();
         auto installed = dir / ".." / BEAM_INSTALL_LIBDIR / "beam-ime";
         options.backend_dir = std::filesystem::exists(installed) ? installed.u8string() : dir.u8string();
+    }
+    if (data_directory.empty()) {
+        auto installed = executable.parent_path() / "../share/beam-ime";
+        if (std::filesystem::exists(executable.parent_path() / "pinyin.tsv")) data_directory = executable.parent_path().u8string();
+        else if (std::filesystem::exists(installed / "pinyin.tsv")) data_directory = installed.u8string();
+        else data_directory = BEAM_BUILD_DATA_DIR;
     }
 
 #ifndef _WIN32
@@ -147,20 +157,25 @@ int beamd_main(int argc, char ** argv) {
         return 1;
     }
     fprintf(stderr, "beamd: %s on %s\n", engine.model_name().c_str(), listener.location.c_str());
+    beam::LearningStore learning(learning_directory.empty() ? beam::learning_data_directory() : std::filesystem::u8path(learning_directory),
+                                std::filesystem::u8path(data_directory) / "pinyin.tsv");
+    beam::LearningRuntime runtime(learning, engine, options.model_path);
 
     std::vector<Client> clients;
+    uint64_t next_owner = 1;
     std::vector<beam::net::Socket> sockets;
     std::vector<char> ready;
     while (!stopping) {
+        runtime.tick();
         sockets = {listener.socket};
         for (auto & c : clients) sockets.push_back(c.socket);
         // A finite timeout so SIGTERM/Ctrl-C is noticed even where signals do not interrupt poll.
-        if (beam::net::wait_readable(sockets, ready, 1000) < 0) { fprintf(stderr, "beamd: poll failed\n"); break; }
+        if (beam::net::wait_readable(sockets, ready, 200) < 0) { fprintf(stderr, "beamd: poll failed\n"); break; }
         if (ready[0]) {
             beam::net::Socket s = beam::net::accept_local(listener);
             if (s != beam::net::kInvalid) {
                 if (clients.size() >= 64) beam::net::close_socket(s);
-                else clients.push_back({s, {}});
+                else clients.push_back({s, {}, next_owner++});
             }
         }
         for (size_t k = 1; k < sockets.size(); ++k) {
@@ -199,6 +214,7 @@ int beamd_main(int argc, char ** argv) {
                 const json & req = requests[r];
                 std::string op = req.value("op", "");
                 json reply = {{"id", req.contains("id") ? req["id"] : json(nullptr)}};
+                try {
                 if (!listener.token.empty() && req.value("token", "") != listener.token) {
                     reply["ok"] = false;
                     reply["error"] = "bad_token";
@@ -208,8 +224,17 @@ int beamd_main(int argc, char ** argv) {
                     reply["protocol"] = kProtocol;
                     reply["version"] = BEAM_VERSION;
                     reply["backend"] = engine.backend_name();
+                    reply["learning"] = runtime.status();
+                } else if (op == "learning") {
+                    reply["learning"] = runtime.command(req); reply["ok"] = true;
+                } else if (op == "composition") {
+                    runtime.composition(req, c.owner); reply["ok"] = true;
+                } else if (op == "feedback") {
+                    reply["learned"] = learning.feedback(req); reply["ok"] = true;
+                    reply["personalization_revision"] = learning.revision();
                 } else if (op == "query") {
                     if (r != newest_query) continue;
+                    runtime.activity();
                     beam::QueryOptions q;
                     q.max_candidates = std::clamp(req.value("max", 5), 1, 10);
                     q.beam_budget_ms = std::clamp(req.value("beam_ms", beam_ms), 0, 2000);
@@ -224,7 +249,7 @@ int beamd_main(int argc, char ** argv) {
                         continue;
                     }
                     reply["ok"] = true;
-                    reply["candidates"] = res.candidates;
+                    reply.update(learning.rank(keys, context, res.candidates, (size_t)q.max_candidates));
                     reply["greedy_ms"] = res.greedy_ms;
                     reply["beam_ms"] = res.beam_ms;
                     reply["beam_complete"] = res.beam_complete;
@@ -239,6 +264,10 @@ int beamd_main(int argc, char ** argv) {
                     reply["ok"] = false;
                     reply["error"] = "unknown_op";
                 }
+                } catch (const std::exception & error) {
+                    reply["ok"] = false; reply["error"] = error.what();
+                    fprintf(stderr, "learning/request error: %s\n", error.what());
+                }
                 if (!send_line(c.socket, reply)) {
                     beam::net::close_socket(c.socket);
                     c.socket = beam::net::kInvalid;
@@ -246,6 +275,7 @@ int beamd_main(int argc, char ** argv) {
                 }
             }
         }
+        for (const auto & c : clients) if (c.socket == beam::net::kInvalid) runtime.disconnect(c.owner);
         clients.erase(std::remove_if(clients.begin(), clients.end(),
                                      [](const Client & c) { return c.socket == beam::net::kInvalid; }),
                       clients.end());

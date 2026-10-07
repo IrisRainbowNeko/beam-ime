@@ -45,6 +45,10 @@ Section
   SetCompress auto
 !endif
   WriteUninstaller "$INSTDIR\uninstall.exe"
+  CreateDirectory "$SMPROGRAMS\Beam"
+  CreateShortcut "$SMPROGRAMS\Beam\Enable Learning.lnk" "${POWERSHELL}" '-NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\beamctl.ps1" learn enable'
+  CreateShortcut "$SMPROGRAMS\Beam\Pause Learning.lnk" "${POWERSHELL}" '-NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\beamctl.ps1" learn pause'
+  CreateShortcut "$SMPROGRAMS\Beam\Learning Status.lnk" "${POWERSHELL}" '-NoExit -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\beamctl.ps1" learn status'
   ; Register recovery before setup: a failed deployment must remain uninstallable.
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayName" "Beam 输入法"
   WriteRegStr HKCU "${UNINST_KEY}" "DisplayVersion" "${VERSION}"
@@ -68,6 +72,12 @@ Section "Uninstall"
   Delete "$INSTDIR\*.dll"
   Delete "$INSTDIR\*.ps1"
   Delete "$INSTDIR\*.psm1"
+  Delete "$INSTDIR\beamctl.cmd"
+  Delete "$INSTDIR\pinyin.tsv"
+  Delete "$SMPROGRAMS\Beam\Enable Learning.lnk"
+  Delete "$SMPROGRAMS\Beam\Pause Learning.lnk"
+  Delete "$SMPROGRAMS\Beam\Learning Status.lnk"
+  RMDir "$SMPROGRAMS\Beam"
   Delete "$INSTDIR\dependencies.lock.json"
   RMDir /r "$INSTDIR\payload"
   RMDir /r "$INSTDIR\licenses"

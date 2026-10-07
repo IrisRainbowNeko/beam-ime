@@ -11,15 +11,39 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#ifdef _WIN32
+#include <windows.h>
+#include <string>
+#include <vector>
 
-int main(int argc, char ** argv) {
+std::string utf8(const wchar_t * value) {
+    if (!value) return {};
+    int length = WideCharToMultiByte(CP_UTF8, 0, value, -1, nullptr, 0, nullptr, nullptr);
+    std::string result(length, '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value, -1, result.data(), length, nullptr, nullptr);
+    result.pop_back();
+    return result;
+}
+#endif
+
+int run(int argc, char ** argv) {
     if (argc < 3) {
         fprintf(stderr, "usage: rime_smoke USER_DATA_DIR SCHEMA_ID KEYS...\n");
         return 2;
     }
+#ifdef _WIN32
+    auto module = LoadLibraryW(L"rime.dll");
+    if (!module) return 10;
+    auto get_api = reinterpret_cast<RimeApi* (*)()>(GetProcAddress(module, "rime_get_api"));
+    if (!get_api) return 11;
+    RimeApi * rime = get_api();
+    auto shared_path = utf8(_wgetenv(L"RIME_SHARED_DATA_DIR"));
+    const char * shared = shared_path.empty() ? nullptr : shared_path.c_str();
+#else
     RimeApi * rime = rime_get_api();
-    RIME_STRUCT(RimeTraits, traits);
     const char * shared = getenv("RIME_SHARED_DATA_DIR");
+#endif
+    RIME_STRUCT(RimeTraits, traits);
     traits.shared_data_dir = shared ? shared : "/usr/share/rime-data";
     traits.user_data_dir = argv[1];
     traits.app_name = "rime.beam-smoke";
@@ -58,3 +82,15 @@ int main(int argc, char ** argv) {
     rime->finalize();
     return 0;
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t ** argv) {
+    std::vector<std::string> args;
+    for (int i = 0; i < argc; ++i) args.push_back(utf8(argv[i]));
+    std::vector<char *> values;
+    for (auto & arg : args) values.push_back(arg.data());
+    return run(argc, values.data());
+}
+#else
+int main(int argc, char ** argv) { return run(argc, argv); }
+#endif

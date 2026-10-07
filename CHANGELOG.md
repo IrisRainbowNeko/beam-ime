@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 - 2026-10-07
+
+- Opt-in commit feedback, persistent personal vocabulary, mixed-pinyin recall and contextual ranking.
+- Bounded recent/replay samples and non-blocking Rime feedback with per-segment correction evidence.
+- Local r8 LoRA training with replay, teacher KL, cooperative pause and exact optimizer/gradient resume.
+- Composition-boundary adapter activation, paired rollback and model fingerprint isolation.
+- Native QVAC Vulkan learning components, offline installation and `beamctl learn` controls; reuse the installed GGUF without Python, PyTorch, CUDA runtime or extra training weights.
+- SQLite/OpenSSL packaging dependencies and model-free plus optional real-adapter regression tests.
+
 ## 0.1.0-beta.2 Windows Installer Fix - 2026-10-04
 
 - Read Weasel's numeric version when its file-version text is empty.
