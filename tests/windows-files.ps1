@@ -37,6 +37,7 @@ try {
     $Source=$root
     $Manifest=Join-Path $root 'learning.json'
     $archive=Join-Path $root 'runtime.zip'
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip=[IO.Compression.ZipFile]::Open($archive,[IO.Compression.ZipArchiveMode]::Create)
     $longName=('long_directory/'*18)+'data.txt'
