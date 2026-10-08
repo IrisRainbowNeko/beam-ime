@@ -25,6 +25,10 @@ candidates are shown for that key. All candidates in the figure are measured.
 
 ## Local Personalization
 
+[Step-by-step screenshots: where to find the learning menu (Chinese)](README.md#本地个性化学习).
+Focus a text field with Beam selected, press **F4** (or <kbd>Ctrl</kbd> + <kbd>&#96;</kbd>), expand the
+abbreviated option row, then use **PageDown** to find **下载并开启模型学习**.
+
 Learning is opt-in: select **下载并开启模型学习** in the Rime schema menu to download,
 install and enable the native component in the background (about 26 MiB on Linux,
 34 MiB on Windows). Compatible installed components are reused. For vocabulary-only
