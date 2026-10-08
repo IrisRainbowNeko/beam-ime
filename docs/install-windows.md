@@ -1,6 +1,6 @@
 # Windows 11 安装
 
-下载 `Beam-0.2.0-windows-x64-setup.exe` 或 `-offline.exe`。
+下载 `Beam-0.2.1-windows-x64-setup.exe` 或 `-offline.exe`。
 轻量版下载模型；离线版已经包含模型和小狼毫安装器。
 
 1. 运行安装器。Beam 安装在当前用户的应用目录。
@@ -51,13 +51,18 @@
 DLL 备份在小狼毫目录的 `beam-backup`，用户资源备份在 `%LOCALAPPDATA%\beam-ime\files`。
 ## 本地个性化学习
 
-首次从 Rime 菜单打开“学习开启”，或运行开始菜单的 `Beam / Enable Learning`。
+打开 Rime 方案菜单，点击“下载并开启模型学习”，即可确认下载 Windows Vulkan 组件（约 34 MiB）。
+下载和校验在后台完成，安装成功后自动开启个性化；已有兼容组件时直接开启。
+不需要管理员权限，也不需要选择文件或配置 Python。期间关闭或暂停学习，安装完成后不会重新开启。
+安装失败可从菜单再次点击重试，具体原因见 `Learning Status`。首次下载需要联网。
+
+只需要即时词库时，从 Rime 菜单打开“学习开启”，或运行开始菜单的 `Beam / Enable Learning`。
 开始菜单的 `Pause Learning` 停止新增记录与训练，`Learning Status` 显示状态。
 也可以在安装目录的终端使用以下命令：
 
 ```powershell
 .\beamctl.cmd learn enable
-.\beamctl.cmd learn install -Manifest '.\beam-learning-0.2.0-windows-x86_64-vulkan.json' -Download
+.\beamctl.cmd learn install -Download
 # 离线导入同一组资产：
 .\beamctl.cmd learn install -Manifest '.\beam-learning-0.2.0-windows-x86_64-vulkan.json' -Source '.'
 .\beamctl.cmd learn status

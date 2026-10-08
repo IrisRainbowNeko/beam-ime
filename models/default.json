@@ -10,5 +10,9 @@
   "size": 639446720,
   "sha256": "35eccd83d31b123e41313fe59bbcd0fefa2b929865fa66dff8ab77187203309c",
   "license": "Apache-2.0",
-  "url": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.1/beam-0.6b-q8_0.gguf"
+  "url": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.1/beam-0.6b-q8_0.gguf",
+  "learning": {
+    "linux-x86_64": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-learning-0.2.0-linux-x86_64-vulkan.json",
+    "windows-x86_64": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-learning-0.2.0-windows-x86_64-vulkan.json"
+  }
 }

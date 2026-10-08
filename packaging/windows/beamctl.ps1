@@ -24,14 +24,28 @@ function Invoke-BeamRequest($Request) {
 }
 
 function Install-LearningComponent {
-    if (-not $Manifest) { throw 'Specify -Manifest with the learning component release manifest.' }
     if (-not $Source -and -not $Download) { throw 'Specify -Source for offline assets or -Download.' }
-    $spec=Get-Content -LiteralPath $Manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+    if (-not $Manifest) {
+        if (-not $Download) { throw 'Specify -Download for automatic installation or -Manifest for offline assets.' }
+        $model=Get-Content -LiteralPath (Join-Path $PSScriptRoot 'models/default.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+        $Manifest=$model.learning.'windows-x86_64'
+    }
+    if ($Manifest.StartsWith('https://')) {
+        if (-not $Download) { throw 'Specify -Download to allow learning component downloads.' }
+        $response=Invoke-WebRequest -UseBasicParsing -Uri $Manifest -TimeoutSec 60
+        if ($response.RawContentStream.Length -gt 65536) { throw 'Learning manifest is too large.' }
+        $memory=New-Object IO.MemoryStream
+        try { $response.RawContentStream.Position=0; $response.RawContentStream.CopyTo($memory); $manifestBytes=$memory.ToArray() }
+        finally { $memory.Dispose(); $response.RawContentStream.Dispose() }
+    } else { $manifestBytes=[IO.File]::ReadAllBytes($Manifest) }
+    $spec=[Text.Encoding]::UTF8.GetString($manifestBytes).TrimStart([char]0xfeff) | ConvertFrom-Json
     if ($spec.schemaVersion -ne 2 -or $spec.platform -ne 'windows-x86_64' -or $spec.backend -ne 'vulkan') {
         throw 'Incompatible learning manifest.'
     }
     $parent=Join-Path $state 'trainer'
-    $identity=(Get-FileHash -LiteralPath $Manifest -Algorithm SHA256).Hash.ToLower().Substring(0,16)
+    $hash=[Security.Cryptography.SHA256]::Create()
+    try { $identity=([BitConverter]::ToString($hash.ComputeHash($manifestBytes))).Replace('-','').ToLower().Substring(0,16) }
+    finally { $hash.Dispose() }
     $final=Join-Path $parent $identity
     if (Test-Path -LiteralPath (Join-Path $final 'component.json')) { return (Join-Path $final 'component.json') }
     $temporary=Join-Path $parent ('.install-'+[guid]::NewGuid().ToString('N'))
@@ -56,12 +70,17 @@ function Install-LearningComponent {
                         $entry.FullName.Split('/') -contains '..' -or (($entry.ExternalAttributes -shr 16) -band 61440) -eq 40960) { throw 'Unsafe archive entry.' }
                 }
             } finally { $zip.Dispose() }
-            # Relative arguments also avoid tar's ANSI argv conversion of Unicode paths.
-            Push-Location -LiteralPath $temporary
+            # A child-only working directory avoids Unicode argv conversion and directory locks.
+            $start=New-Object Diagnostics.ProcessStartInfo (Join-Path $env:SystemRoot 'System32\tar.exe')
+            $start.Arguments='-x -k -f "'+$asset.filename+'" -C component'
+            $start.WorkingDirectory=$temporary
+            $start.UseShellExecute=$false
+            $start.CreateNoWindow=$true
+            $process=[Diagnostics.Process]::Start($start)
             try {
-                & (Join-Path $env:SystemRoot 'System32\tar.exe') -x -k -f $asset.filename -C 'component'
-                if ($LASTEXITCODE -ne 0) { throw "Learning archive extraction failed: $($asset.filename)" }
-            } finally { Pop-Location }
+                $process.WaitForExit()
+                if ($process.ExitCode -ne 0) { throw "Learning archive extraction failed: $($asset.filename)" }
+            } finally { $process.Dispose() }
         }
         $component=Get-Content -LiteralPath (Join-Path $unpacked 'component.json') -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($component.base_sha256 -ne $spec.base_sha256 -or $component.backend -ne $spec.backend) { throw 'Component metadata mismatch.' }

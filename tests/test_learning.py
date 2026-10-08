@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 from beamlib.learning import install_component
@@ -71,6 +73,28 @@ class LearningInstallTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'checksum'):
                 install_component(manifest, root / 'installed', source=root)
             self.assertEqual(list((root / 'installed').iterdir()), [])
+
+    def test_online_manifest_downloads_once_and_reuses_component(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary); manifest = self.package(root)
+            spec = json.loads(manifest.read_text())
+            url = 'https://example.test/learning.json'
+            archive_url = 'https://example.test/runtime.zip'
+            spec['assets'][0]['url'] = archive_url
+            downloads = {url: json.dumps(spec).encode(), archive_url: (root / 'runtime.zip').read_bytes()}
+            with mock.patch('beamlib.learning.urllib.request.urlopen',
+                            side_effect=lambda address, timeout: io.BytesIO(downloads[address])) as fetch:
+                installed = install_component(url, root / 'installed', download=True)
+                self.assertTrue(installed.exists())
+                self.assertEqual(install_component(url, root / 'installed', download=True), installed)
+            self.assertEqual([call.args[0] for call in fetch.call_args_list], [url, archive_url, url])
+
+    def test_online_manifest_requires_download_confirmation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch('beamlib.learning.urllib.request.urlopen') as fetch:
+                with self.assertRaisesRegex(ValueError, '--download'):
+                    install_component('https://example.test/learning.json', Path(temporary) / 'installed')
+                fetch.assert_not_called()
 
     def test_archive_cannot_escape_destination(self):
         with tempfile.TemporaryDirectory() as temporary:

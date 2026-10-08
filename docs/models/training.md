@@ -79,7 +79,7 @@ python3 tools/build_learning.py --cross --build-dir build/learning-win --prefix 
 python tools/package_learning.py \
   --runtime build/learning-runtime --model models/beam-0.6b-q8_0.gguf \
   --pinyin build/release/data/pinyin.tsv --platform linux-x86_64 \
-  --release-url https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0
+  --release-url "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v$(cat VERSION)"
 ```
 
 输出 `beam-learning-<版本>-<平台>-vulkan.json` 和一份 ZIP。

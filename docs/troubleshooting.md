@@ -34,6 +34,7 @@ patch:
 Windows 使用安装目录中的 `beamctl.cmd learn status`，或开始菜单的 `Learning Status`。
 
 - **词库能记住，模型未训练**：检查 `trainer.installed`。普通包只带词库和 adapter 推理，训练组件需要单独安装。
+- **菜单显示安装失败**：用 `beamctl learn status`（Windows 为开始菜单 `Learning Status`）查看 `last_error`；检查网络后重新点击“安装失败，点此重试”。自定义基座需使用与该模型匹配的组件 manifest。
 - **一直等待训练**：自动训练要求 64 条新记录、5 分钟无 Beam 输入、接通电源，距上轮成功至少 4 小时。`learn train` 可手动启动。
 - **显示 paused / pausing**：恢复输入会在当前 microbatch 后暂停并保存状态；保持空闲后续跑。手动暂停需 `learn resume`。
 - **更换模型后 model_mismatch**：安装与新 GGUF 指纹匹配的训练组件；已有词库继续使用，新基座有独立适配器。

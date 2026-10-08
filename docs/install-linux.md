@@ -7,7 +7,7 @@
 
 ```sh
 sudo pacman -S --needed fcitx5 fcitx5-rime python python-yaml
-sudo pacman -U ./beam-ime-0.2.0-arch-x86_64.pkg.tar.zst
+sudo pacman -U ./beam-ime-0.2.1-arch-x86_64.pkg.tar.zst
 ```
 
 Arch 包匹配构建时的 librime。系统滚动更新导致版本不匹配时，使用
@@ -18,14 +18,14 @@ Arch 包匹配构建时的 librime。系统滚动更新导致版本不匹配时�
 ```sh
 sudo apt update
 sudo apt install fcitx5 fcitx5-rime librime-plugin-lua python3-yaml
-sudo apt install ./beam-ime-0.2.0-ubuntu24.04-amd64.deb
+sudo apt install ./beam-ime-0.2.1-ubuntu24.04-amd64.deb
 ```
 
 ## Fedora 44
 
 ```sh
 sudo dnf install fcitx5 fcitx5-rime librime-lua python3-pyyaml
-sudo dnf install ./beam-ime-0.2.0-fedora44-x86_64.rpm
+sudo dnf install ./beam-ime-0.2.1-fedora44-x86_64.rpm
 ```
 
 Fedora Workstation 默认的 IBus 与 Beam 使用的 Fcitx5 是不同前端，需要先在桌面环境启用 Fcitx5。
@@ -68,11 +68,16 @@ beamctl setup
 `beamctl doctor` 提供不含输入文本的诊断。日志：`journalctl --user -u beam-ime.service`。
 ## 本地个性化学习
 
-普通安装后，学习默认关闭。可从 Rime 菜单开启“学习开启”，或运行 `beamctl learn enable`。
-词库立即学习，训练组件需单独安装：
+普通安装后，学习默认关闭。打开 Rime 方案菜单，点击“下载并开启模型学习”，即可确认下载对应的
+Vulkan 组件（约 26 MiB）；后台校验、安装完成后自动开启个性化。已有兼容组件时直接开启，不重复下载。
+安装期间仍可输入；期间关闭或暂停学习，完成安装后也不会重新开启。安装失败会显示“安装失败，点此重试”，
+具体原因见 `beamctl learn status`。这个入口需要联网，并使用当前公开模型对应的固定版本组件。
+
+只需要即时词库时，仍可单独打开“学习开启”，或运行 `beamctl learn enable`。
+命令行自动安装无需预先下载 manifest；离线或自定义组件保留显式 manifest 入口：
 
 ```sh
-beamctl learn install --manifest ./beam-learning-0.2.0-linux-x86_64-vulkan.json --download
+beamctl learn install --download
 # 离线资产与 manifest 位于同一目录时：
 beamctl learn install --manifest ./beam-learning-0.2.0-linux-x86_64-vulkan.json --source .
 beamctl learn status

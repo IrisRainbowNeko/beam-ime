@@ -55,10 +55,23 @@ def main():
                         client.connect(str(endpoint))
                         client.sendall(b'{"id":1,"op":"health"}\n')
                         with client.makefile('rb') as stream:
-                            assert json.loads(stream.readline())['ok']
+                            health = json.loads(stream.readline())
+                            assert health['ok']
                     break
                 time.sleep(.1)
-            result = subprocess.run(command + ['@beam_learning', 'nihao', '{space}', 'shijie', '{Escape}'], env=env,
+            component = root / 'component.json'
+            component.write_text(json.dumps({'schemaVersion': 2, 'version': 'smoke-fixture',
+                'base_sha256': health['learning']['base_sha256'], 'prompt_version': 'keys_llm_v1',
+                'tokenizer': 'gguf-embedded', 'recipe': 'beam-personal-r8-qvac-v1', 'backend': 'vulkan',
+                'executable': str(binary / 'beamd'), 'replay': str(component),
+                'pinyin': str(args.build.resolve() / 'data/pinyin.tsv')}))
+            with socket.socket(socket.AF_UNIX) as client:
+                client.settimeout(15); client.connect(str(endpoint))
+                client.sendall((json.dumps({'id': 1, 'op': 'learning', 'action': 'install', 'manifest': str(component)})+'\n').encode())
+                with client.makefile('rb') as stream:
+                    installed = json.loads(stream.readline())
+                    assert installed['ok'] and not installed['learning']['enabled']
+            result = subprocess.run(command + ['@beam_learning_install', 'nihao', '{space}', 'shijie', '{Escape}'], env=env,
                                     capture_output=True, text=True, timeout=180)
             if result.returncode:
                 raise RuntimeError(result.stderr)
@@ -70,6 +83,13 @@ def main():
                 learned = db.execute('SELECT COUNT(*) FROM recent').fetchone()[0]
             if learned != 1:
                 raise RuntimeError(f'Expected exactly one committed learning event, got {learned}')
+            paused = subprocess.run(command + ['@beam_learning_install', '@beam_learning_paused', 'shijie', '{space}'],
+                                    env=env, capture_output=True, text=True, timeout=180)
+            if paused.returncode:
+                raise RuntimeError(paused.stderr)
+            with sqlite3.connect(root / 'learning/learning.sqlite3') as db:
+                if db.execute('SELECT COUNT(*) FROM recent').fetchone()[0] != 1:
+                    raise RuntimeError('Pausing from the setup menu still collected feedback')
             daemon.terminate()
             daemon.wait(timeout=15)
             fallback = subprocess.run(command + ['nihao', '{space}'], env=env, check=True,

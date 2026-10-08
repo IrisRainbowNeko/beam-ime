@@ -126,7 +126,7 @@ class Child {
         }
         SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
         HANDLE output = CreateFileW(log.c_str(), GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (output == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot create trainer log");
+        if (output == INVALID_HANDLE_VALUE) throw std::runtime_error("cannot create child process log");
         STARTUPINFOW startup{}; startup.cb = sizeof(startup); startup.dwFlags = STARTF_USESTDHANDLES;
         startup.hStdOutput = startup.hStdError = output;
         startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
@@ -134,7 +134,7 @@ class Child {
         BOOL created = CreateProcessW(nullptr, command.data(), nullptr, nullptr, TRUE, CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS,
                                       nullptr, nullptr, &startup, &process);
         CloseHandle(output);
-        if (!created) throw std::runtime_error("cannot start trainer");
+        if (!created) throw std::runtime_error("cannot start child process");
         handle_ = process.hProcess; CloseHandle(process.hThread);
 #else
         std::vector<char *> argv;
@@ -146,7 +146,7 @@ class Child {
         posix_spawn_file_actions_adddup2(&actions, STDOUT_FILENO, STDERR_FILENO);
         int error = posix_spawn(&pid_, argv[0], &actions, nullptr, argv.data(), environ);
         posix_spawn_file_actions_destroy(&actions);
-        if (error) { pid_ = -1; throw std::runtime_error("cannot start trainer: " + std::to_string(error)); }
+        if (error) { pid_ = -1; throw std::runtime_error("cannot start child process: " + std::to_string(error)); }
 #endif
     }
     int poll() {
@@ -159,7 +159,7 @@ class Child {
         int status;
         auto done = waitpid(pid_, &status, WNOHANG);
         if (!done || (done < 0 && errno == EINTR)) return -1;
-        if (done < 0) throw std::runtime_error("cannot wait for trainer");
+        if (done < 0) throw std::runtime_error("cannot wait for child process");
         pid_ = -1;
         return WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
 #endif
@@ -179,12 +179,14 @@ struct LearningRuntime::Impl {
     std::string fingerprint, model_path, applied, failed_adapter;
     std::map<std::string, uint64_t> compositions;
     Clock::time_point last_activity = Clock::now(), last_poll = Clock::now();
-    Child child;
-    bool force = false, reset_pending = false;
+    Child child, installer;
+    std::vector<std::string> installer_args;
+    bool force = false, reset_pending = false, enable_after_install = false;
     Json job;
 
-    Impl(LearningStore & s, Engine & e, const std::string & model) : store(s), engine(e), fingerprint(sha256(std::filesystem::u8path(model))),
-        model_path(std::filesystem::absolute(std::filesystem::u8path(model)).u8string()) {
+    Impl(LearningStore & s, Engine & e, const std::string & model, std::vector<std::string> install_args)
+        : store(s), engine(e), fingerprint(sha256(std::filesystem::u8path(model))),
+          model_path(std::filesystem::absolute(std::filesystem::u8path(model)).u8string()), installer_args(std::move(install_args)) {
         auto current = store.setting("active_adapter", Json::object());
         if (current.value("base_sha256", "") != fingerprint) store.set("active_adapter", store.setting("adapter_" + fingerprint, Json::object()));
         auto pending = store.setting("pending_adapter", Json::object());
@@ -195,6 +197,10 @@ struct LearningRuntime::Impl {
         auto training = store.setting("training", Json::object());
         if (training.value("state", "") == "running" || training.value("state", "") == "pausing")
             store.set("training", {{"state", "paused"}, {"reason", "service_restarted"}});
+        if (store.setting("installation", Json::object()).value("state", "") == "installing") {
+            store.set("installation", {{"state", "error"}});
+            store.set("last_error", "learning component installation was interrupted by service restart");
+        }
     }
     void pause() {
         if (child.running() && !job.empty()) {
@@ -218,6 +224,25 @@ struct LearningRuntime::Impl {
         store.set("pending_adapter", manifest);
     }
     void tick() {
+        if (installer.running()) {
+            int code = installer.poll();
+            if (code >= 0) {
+                if (code == 0) {
+                    auto component = store.setting("trainer", Json::object());
+                    if (component.empty() || component.value("base_sha256", "") != fingerprint)
+                        throw std::runtime_error("installer did not register a compatible learning component");
+                    if (enable_after_install) { store.set("enabled", true); store.set("paused", false); failed_adapter.clear(); }
+                    store.set("installation", {{"state", "ready"}}); store.set("last_error", "");
+                } else {
+                    std::ifstream log(store.directory() / "install.log");
+                    std::array<char, 4096> text{}; log.read(text.data(), text.size());
+                    store.set("installation", {{"state", "error"}, {"exit_code", code}});
+                    store.set("last_error", "learning component installer exited with code " + std::to_string(code) + ": " +
+                              std::string(text.data(), (size_t)log.gcount()));
+                }
+                enable_after_install = false; store.changed();
+            }
+        }
         if (child.running()) {
             int code = child.poll();
             auto directory = std::filesystem::u8path(job.at("directory").get<std::string>());
@@ -277,7 +302,7 @@ struct LearningRuntime::Impl {
                 }
             }
         }
-        if (child.running() || reset_pending || !store.collecting() || !compositions.empty()) return;
+        if (child.running() || installer.running() || reset_pending || !store.collecting() || !compositions.empty()) return;
         auto component = store.setting("trainer", Json::object());
         if (component.empty()) return;
         if (component.value("schemaVersion", 0) != 2) {
@@ -309,8 +334,9 @@ struct LearningRuntime::Impl {
     }
 };
 
-LearningRuntime::LearningRuntime(LearningStore & store, Engine & engine, const std::string & model)
-    : impl_(std::make_unique<Impl>(store, engine, model)) {}
+LearningRuntime::LearningRuntime(LearningStore & store, Engine & engine, const std::string & model,
+                                 std::vector<std::string> installer)
+    : impl_(std::make_unique<Impl>(store, engine, model, std::move(installer))) {}
 LearningRuntime::~LearningRuntime() {
     try {
         impl_->pause();
@@ -343,6 +369,8 @@ void LearningRuntime::tick() {
     impl_->last_poll = Clock::now();
     try { impl_->tick(); }
     catch (const std::exception & error) {
+        if (!impl_->installer.running() && impl_->store.setting("installation", Json::object()).value("state", "") == "installing")
+            impl_->store.set("installation", {{"state", "error"}});
         impl_->store.set("last_error", error.what()); impl_->store.set("training", {{"state", "error"}});
     }
 }
@@ -350,6 +378,28 @@ Json LearningRuntime::command(const Json & request) {
     auto & m = *impl_; auto & store = m.store;
     std::string action = request.at("action");
     if (action == "status") return status();
+    if (action == "setup") {
+        if (!request.value("confirm", false)) throw std::runtime_error("setup requires confirm=true to download and enable learning");
+        auto component = store.setting("trainer", Json::object());
+        if (component.value("schemaVersion", 0) == 2 && component.value("base_sha256", "") == m.fingerprint) {
+            action = "enable";
+            if (!m.installer.running()) store.set("installation", {{"state", "ready"}});
+        }
+        else {
+            if (m.child.running()) throw std::runtime_error("pause training before installing a component");
+            m.enable_after_install = true;
+            if (!m.installer.running()) {
+                try { m.installer.start(m.installer_args, store.directory() / "install.log"); }
+                catch (const std::exception & error) {
+                    store.set("installation", {{"state", "error"}}); store.set("last_error", error.what()); throw;
+                }
+                store.set("installation", {{"state", "installing"}}); store.set("last_error", ""); store.changed();
+            }
+            return status();
+        }
+    }
+    if (action == "disable" || action == "pause" || action == "reset") m.enable_after_install = false;
+    if ((action == "enable" || action == "resume") && m.installer.running()) m.enable_after_install = true;
     if (action == "enable" || action == "resume") { store.set("enabled", true); store.set("paused", false); m.failed_adapter.clear(); }
     else if (action == "disable") { store.set("enabled", false); m.pause(); }
     else if (action == "pause") { store.set("paused", true); m.pause(); }
@@ -388,6 +438,7 @@ Json LearningRuntime::command(const Json & request) {
             m.job = Json();
         }
         store.set("trainer", component);
+        if (!m.installer.running()) store.set("installation", {{"state", "ready"}});
     } else throw std::runtime_error("unknown learning action");
     if (action == "train" || action == "resume" || action == "enable" || action == "install") {
         store.set("last_error", ""); store.set("training", {{"state", store.setting("trainer", Json::object()).empty() ? "not_installed" : "idle"}});

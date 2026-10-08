@@ -83,7 +83,10 @@ def main():
             request['confirm'] = True
         if args.action == 'install':
             if not args.manifest:
-                parser.error('install requires --manifest pointing to the learning component release manifest')
+                if not args.download:
+                    parser.error('use --download for automatic installation, or --manifest with --source for offline assets')
+                platform = 'windows-x86_64' if os.name == 'nt' else 'linux-x86_64'
+                args.manifest = read_manifest(SHARE / 'models/default.json')['learning'][platform]
             component = install_component(args.manifest, data_dir() / 'trainer', args.source, args.download)
             request['manifest'] = str(component)
         result = query(request)
@@ -95,7 +98,7 @@ def main():
         spec = read_manifest(args.manifest)
         print(install(spec, data_dir() / "models" / spec["filename"], args.source, args.download))
     elif args.command == "doctor":
-        result = {"version": "0.2.0", "platform": sys.platform, "modelInstalled": (data_dir() / "models/beam-0.6b-q8_0.gguf").exists()}
+        result = {"version": "0.2.1", "platform": sys.platform, "modelInstalled": (data_dir() / "models/beam-0.6b-q8_0.gguf").exists()}
         try:
             result["service"] = query({"op": "health"})
         except (OSError, ValueError):

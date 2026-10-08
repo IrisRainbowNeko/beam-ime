@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.1 - 2026-10-08
+
+- Download, install and enable the native learning component directly from the Rime menu.
+- Show installation progress and retry status without blocking input; pause or disable cancels automatic activation.
+- Resolve the released learning manifest automatically for `beamctl learn install --download`.
+- Fix Windows first-install cleanup by isolating the archive extractor's working directory.
+- Reuse the 0.2.0 learning components and existing Q8 model; add an editable learning-system flowchart.
+
 ## 0.2.0 - 2026-10-07
 
 - Opt-in commit feedback, persistent personal vocabulary, mixed-pinyin recall and contextual ranking.

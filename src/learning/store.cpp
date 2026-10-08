@@ -218,6 +218,7 @@ Json LearningStore::status() const {
             {"words", count.integer(0)}, {"recent_samples", count.integer(1)}, {"replay_samples", count.integer(2)},
             {"confirmed_events", setting("clock", uint64_t(0))}, {"revision", revision()},
             {"trainer", trainer_status}, {"training", setting("training", {{"state", "not_installed"}})},
+            {"installation", setting("installation", {{"state", trainer.empty() ? "not_installed" : "ready"}})},
             {"adapter", adapter_status}, {"last_error", setting("last_error", "")},
             {"client_errors", setting("client_errors", uint64_t(0))}};
 }

@@ -4,7 +4,7 @@ A local Chinese input method powered by a keys-conditioned 0.6B language model.
 Type initials, partial/full pinyin, or Chinese-English mixed input. Beam returns
 whole-input candidates and keeps Rime Ice available as a fallback.
 
-**Version 0.2.0:** x86_64 Arch Linux, Ubuntu 24.04, Fedora 44 and Windows 11.
+**Version 0.2.1:** x86_64 Arch Linux, Ubuntu 24.04, Fedora 44 and Windows 11.
 [Downloads](https://github.com/IrisRainbowNeko/beam-ime/releases).
 
 ![How Beam works: the same keys go through Rime Ice and through Beam-LLM; Beam uses the context and writes whole-sentence candidates locally](docs/images/overview.en.svg)
@@ -25,7 +25,10 @@ candidates are shown for that key. All candidates in the figure are measured.
 
 ## Local Personalization
 
-Learning is opt-in: enable it from the Rime menu or with `beamctl learn enable`.
+Learning is opt-in: select **下载并开启模型学习** in the Rime schema menu to download,
+install and enable the native component in the background (about 26 MiB on Linux,
+34 MiB on Windows). Compatible installed components are reused. For vocabulary-only
+learning, use the learning toggle or `beamctl learn enable`.
 Confirmed words become available immediately, with feedback-based ranking.
 The separate native QVAC Vulkan component reuses the installed Q8 GGUF for
 periodic local r8 LoRA updates. Training pauses when input resumes.
@@ -35,6 +38,9 @@ Learning requires a working Vulkan GPU driver. The component includes no Python,
 PyTorch, CUDA runtime or additional full-precision base weights. See the
 [Linux](docs/install-linux.md#本地个性化学习) and
 [Windows](docs/install-windows.md#本地个性化学习) instructions.
+
+[Learning-system flowchart (Chinese)](docs/images/learning-system.drawio.png) ·
+[Editable diagram](docs/images/learning-system.drawio).
 
 [Build instructions](docs/build.md), [architecture](docs/architecture.md),
 [model card](docs/models/model-card.md), [privacy](PRIVACY.md).

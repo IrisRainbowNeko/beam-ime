@@ -1,8 +1,8 @@
-# Beam 0.2.0
+# Beam 0.2.1
 
-新增本地个性化学习：即时个人词库、反馈排序和 QVAC Vulkan 原生 r8 LoRA 训练。
-学习组件复用已有 Q8 GGUF，不携带 Python、PyTorch、CUDA runtime 或第二份训练权重。
-0.x 为开发阶段版本，版本号统一使用 `0.2.0`，不加 beta 后缀。
+现在可以在输入法菜单点击 **「下载并开启模型学习」**，后台自动下载安装并开启个性化。
+Linux 下载约 26 MiB，Windows 约 34 MiB；继续复用 0.2.0 的 QVAC Vulkan 组件及已有 Q8 GGUF。
+0.x 为开发阶段版本，版本号不加 beta 后缀。
 
 ## 下载哪个包
 
@@ -10,10 +10,10 @@
 
 | 平台 | 输入法前端 | 轻量安装包 | 离线完整包 |
 |---|---|---|---|
-| Arch Linux | Fcitx5-Rime | [下载 .pkg.tar.zst](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-arch-x86_64.pkg.tar.zst) | [下载离线 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-arch-x86_64-offline.tar) |
-| Ubuntu 24.04 LTS | Fcitx5-Rime | [下载 .deb](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-ubuntu24.04-amd64.deb) | [下载离线 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-ubuntu24.04-x86_64-offline.tar) |
-| Fedora 44 | Fcitx5-Rime | [下载 .rpm](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-fedora44-x86_64.rpm) | [下载离线 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-fedora44-x86_64-offline.tar) |
-| Windows 11 | 小狼毫 Weasel 0.17.4 | [下载 setup.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/Beam-0.2.0-windows-x64-setup.exe) | [下载 offline.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/Beam-0.2.0-windows-x64-offline.exe) |
+| Arch Linux | Fcitx5-Rime | [下载 .pkg.tar.zst](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-arch-x86_64.pkg.tar.zst) | [下载离线 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-arch-x86_64-offline.tar) |
+| Ubuntu 24.04 LTS | Fcitx5-Rime | [下载 .deb](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-ubuntu24.04-amd64.deb) | [下载离线 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-ubuntu24.04-x86_64-offline.tar) |
+| Fedora 44 | Fcitx5-Rime | [下载 .rpm](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-fedora44-x86_64.rpm) | [下载离线 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-fedora44-x86_64-offline.tar) |
+| Windows 11 | 小狼毫 Weasel 0.17.4 | [下载 setup.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/Beam-0.2.1-windows-x64-setup.exe) | [下载 offline.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/Beam-0.2.1-windows-x64-offline.exe) |
 
 ## Linux 安装
 
@@ -21,13 +21,13 @@
 
 ```sh
 # Arch Linux
-sudo pacman -U ./beam-ime-0.2.0-arch-x86_64.pkg.tar.zst
+sudo pacman -U ./beam-ime-0.2.1-arch-x86_64.pkg.tar.zst
 
 # Ubuntu 24.04
-sudo apt install ./beam-ime-0.2.0-ubuntu24.04-amd64.deb
+sudo apt install ./beam-ime-0.2.1-ubuntu24.04-amd64.deb
 
 # Fedora 44
-sudo dnf install ./beam-ime-0.2.0-fedora44-x86_64.rpm
+sudo dnf install ./beam-ime-0.2.1-fedora44-x86_64.rpm
 ```
 
 安装轻量包后，用桌面用户执行以下命令（不要加 sudo）：
@@ -49,15 +49,18 @@ Linux 离线包不包含系统依赖，需预先安装 Fcitx5-Rime 等依赖；�
 
 ## 本次更新
 
-- 新增默认关闭的本地个性化：即时词库、反馈排序、空闲时的个人 r8 LoRA 训练，以及暂停、关闭、回退和清空操作。
-- 学习组件与普通安装包分开，使用 QVAC 原生 Vulkan 训练，复用 Q8 GGUF；不再分发 Python、PyTorch 或额外训练权重。
-- 修复 Windows 中文路径下的 YAML / Lua 文件读取，以及学习组件的长路径解压。
-- 四个平台的程序包和独立学习组件使用统一版本，支持在线与离线安装。
+- 输入法菜单新增一键下载安装并开启学习，安装过程异步执行，重复点击合并为同一任务。
+- 菜单显示安装中、已安装和失败重试状态；安装期间暂停或关闭学习会取消自动开启。
+- 命令行 `beamctl learn install --download` 自动选择对应平台的固定版本 manifest；Windows 对应 `beamctl.cmd learn install -Download`。
+- 修复 Windows 首次安装学习组件时的临时目录占用问题，保留中文、空格与长路径支持。
+- 加入[学习系统流程图](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.1/docs/images/learning-system.drawio.png)及[可编辑源文件](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.1/docs/images/learning-system.drawio)。
 - 程序和模型独立升级。已有模型可继续使用，升级 Linux 程序包后运行 `beamctl setup` 即可。
 
 ## 学习组件
 
-普通安装后即可开启即时词库；需要周期 LoRA 时再下载对应组件。在线安装只需 manifest，离线安装需同时下载对应的一份 ZIP。
+在 Rime 方案菜单选择 **「下载并开启模型学习」** 即可在线安装，不需要预先下载 manifest。
+只需要即时词库时，可单独打开「学习开启」。组件沿用 0.2.0，程序升级无需重复下载。
+离线安装需下载下表同一平台的 manifest 和 ZIP；程序离线包不额外捆绑学习组件。
 
 | 平台 | manifest | QVAC Vulkan 学习组件 |
 |---|---|---|
@@ -71,10 +74,10 @@ Linux 离线包不包含系统依赖，需预先安装 Fcitx5-Rime 等依赖；�
 ## 模型、校验和文档
 
 - [单独下载模型 GGUF，约 610 MiB](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.1.0-beta.1/beam-0.6b-q8_0.gguf)；本版沿用已发布模型。
-- [SHA256SUMS](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/SHA256SUMS) · [模型 manifest](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/model-manifest.json)
-- [Arch PKGBUILD](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/PKGBUILD) · [源码包](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-source.tar.gz) · [Windows 调试符号](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/Beam-0.2.0-windows-x64-symbols.zip)
-- [Linux 安装、升级与卸载](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.0/docs/install-linux.md) · [编译与打包](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.0/docs/build.md) · [故障排查](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.0/docs/troubleshooting.md)
+- [SHA256SUMS](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/SHA256SUMS) · [模型 manifest](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/model-manifest.json)
+- [Arch PKGBUILD](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/PKGBUILD) · [源码包](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-source.tar.gz) · [Windows 调试符号](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/Beam-0.2.1-windows-x64-symbols.zip)
+- [Linux 安装、升级与卸载](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.1/docs/install-linux.md) · [编译与打包](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.1/docs/build.md) · [故障排查](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.1/docs/troubleshooting.md)
 
 各平台验证范围见 [测试记录](https://github.com/IrisRainbowNeko/beam-ime/blob/main/docs/testing.md)。
 Windows 个性化训练为实验支持：安装及原生 CPU 续训已在 Windows 11 虚拟机验证，Vulkan 训练需真实显卡验证。
-Windows 中文用户目录下，卸载恢复原版小狼毫 DLL 后可能遇到其部署程序退出 `0xc0000409`；恢复入口会保留，确认 DLL 已恢复后再次卸载可完成清理，详见 [故障排查](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.0/docs/troubleshooting.md#卸载后宿主部署失败)。
+Windows 中文用户目录下，卸载恢复原版小狼毫 DLL 后可能遇到其部署程序退出 `0xc0000409`；恢复入口会保留，确认 DLL 已恢复后再次卸载可完成清理，详见 [故障排查](https://github.com/IrisRainbowNeko/beam-ime/blob/v0.2.1/docs/troubleshooting.md#卸载后宿主部署失败)。

@@ -18,15 +18,15 @@ Beam 把上文和按键直接交给本机的 Beam-LLM（基于 Qwen3-0.6B 微调
 
 ## 下载和安装
 
-当前版本：**0.2.0**。面向 x86_64 的 Arch Linux、Ubuntu 24.04、Fedora 44 和 Windows 11。
+当前版本：**0.2.1**。面向 x86_64 的 Arch Linux、Ubuntu 24.04、Fedora 44 和 Windows 11。
 Linux 使用 Fcitx5-Rime，Windows 使用小狼毫 Weasel 0.17.4。
 
 | 系统 | 轻量包 | 离线包 | 教程 |
 |---|---|---|---|
-| Arch Linux | [下载 .pkg.tar.zst](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-arch-x86_64.pkg.tar.zst) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-arch-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
-| Ubuntu 24.04 | [下载 .deb](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-ubuntu24.04-amd64.deb) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-ubuntu24.04-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
-| Fedora 44 | [下载 .rpm](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-fedora44-x86_64.rpm) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-ime-0.2.0-fedora44-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
-| Windows 11 | [下载 setup.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/Beam-0.2.0-windows-x64-setup.exe) | [下载 offline.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/Beam-0.2.0-windows-x64-offline.exe) | [Windows 安装](docs/install-windows.md) |
+| Arch Linux | [下载 .pkg.tar.zst](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-arch-x86_64.pkg.tar.zst) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-arch-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
+| Ubuntu 24.04 | [下载 .deb](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-ubuntu24.04-amd64.deb) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-ubuntu24.04-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
+| Fedora 44 | [下载 .rpm](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-fedora44-x86_64.rpm) | [下载 .tar](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/beam-ime-0.2.1-fedora44-x86_64-offline.tar) | [Linux 安装](docs/install-linux.md) |
+| Windows 11 | [下载 setup.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/Beam-0.2.1-windows-x64-setup.exe) | [下载 offline.exe](https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.1/Beam-0.2.1-windows-x64-offline.exe) | [Windows 安装](docs/install-windows.md) |
 
 轻量包在安装或首次配置时下载模型。离线完整包包含同一个模型；Windows 离线包也包含小狼毫。
 Linux 的离线包仍需要系统已有 Fcitx5-Rime 及发行版依赖。
@@ -58,8 +58,10 @@ beamctl setup
 
 ## 本地个性化学习
 
-首次手动开启：Linux 运行 `beamctl learn enable`，Windows 使用开始菜单的
-`Beam / Enable Learning`，或在 Rime 菜单打开学习。新词确认上屏后即可召回，支持全拼、简拼、混拼和句内组合。
+首次在 Rime 方案菜单点击 **「下载并开启模型学习」**，后台下载、校验和安装原生组件，完成后自动开启。
+Linux 约 26 MiB，Windows 约 34 MiB；已有兼容组件时直接开启。安装期间可继续输入，失败可从菜单重试。
+只需要即时词库时，可单独打开「学习开启」或运行 `beamctl learn enable`。
+新词确认上屏后即可召回，支持全拼、简拼、混拼和句内组合。
 
 需要模型学习时，单独安装匹配当前基座的 QVAC Vulkan 原生组件，直接复用已安装的 Q8 GGUF。
 学习组件不包含 Python、PyTorch、CUDA runtime 或额外的完整精度权重，需要可用的 Vulkan 显卡驱动。
@@ -67,6 +69,10 @@ beamctl setup
 暂停保留已有词库和适配器；关闭个性化会停用它们。清空学习需要显式确认。
 操作见 [Linux 教程](docs/install-linux.md#本地个性化学习) 和 [Windows 教程](docs/install-windows.md#本地个性化学习)，
 配方与打包见 [模型开发](docs/models/training.md#个人-lora-训练组件)。
+
+![Beam 本地学习系统：上屏反馈更新即时词库，空闲时进行 QVAC Vulkan LoRA 训练，组词结束后切换适配器](docs/images/learning-system.drawio.png)
+
+[查看可编辑流程图](docs/images/learning-system.drawio)
 
 ## 构建和开发
 

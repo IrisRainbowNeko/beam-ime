@@ -97,9 +97,14 @@ AsyncClient::~AsyncClient() {
 bool AsyncClient::enqueue(Work work) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (stopping_ || queue_.size() >= 128) { ++errors_; return false; }
+    if (work.request.value("op", "") == "learning" && work.request.value("action", "") != "status") ++learning_pending_;
     queue_.push_back(std::move(work)); available_.notify_one(); return true;
 }
 void AsyncClient::post(nlohmann::json request) { enqueue({std::move(request), 400, {}}); }
+nlohmann::json AsyncClient::learning_status() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return learning_pending_ ? nlohmann::json() : learning_status_;
+}
 std::optional<nlohmann::json> AsyncClient::query(nlohmann::json request, int timeout_ms) {
     auto reply = std::make_shared<std::promise<std::optional<nlohmann::json>>>();
     auto future = reply->get_future();
@@ -111,12 +116,35 @@ void AsyncClient::run() {
     while (true) {
         Work work;
         { std::unique_lock<std::mutex> lock(mutex_);
-          available_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
-          if (queue_.empty()) return;
-          work = std::move(queue_.front()); queue_.pop_front(); }
+          bool installing = learning_status_.is_object() && learning_status_.contains("installation") &&
+                            learning_status_["installation"].value("state", "") == "installing";
+          if (installing) available_.wait_for(lock, std::chrono::seconds(1), [&] { return stopping_ || !queue_.empty(); });
+          else available_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
+          if (stopping_) return;
+          if (queue_.empty()) work = {{{"op", "learning"}, {"action", "status"}}, 400, {}};
+          else { work = std::move(queue_.front()); queue_.pop_front(); } }
         std::optional<nlohmann::json> reply;
+        std::string error;
         try { reply = client_.request(work.request, work.timeout); }
-        catch (const std::exception &) { ++errors_; }
+        catch (const std::exception & failure) { error = failure.what(); }
+        { std::lock_guard<std::mutex> lock(mutex_);
+          if (reply && reply->value("ok", false) && reply->contains("learning")) {
+              const auto & status = (*reply)["learning"];
+              if (status.is_object() && status.contains("enabled") && status["enabled"].is_boolean() &&
+                  status.contains("paused") && status["paused"].is_boolean() &&
+                  status.contains("installation") && status["installation"].is_object() &&
+                  status["installation"].contains("state") && status["installation"]["state"].is_string() &&
+                  status.contains("last_error") && status["last_error"].is_string()) learning_status_ = status;
+              else { ++errors_; error = "invalid learning status from daemon"; }
+          }
+          if (work.request.value("op", "") == "learning" && work.request.value("action", "") != "status") {
+              --learning_pending_;
+              if (work.request.value("action", "") == "setup" && (!reply || !reply->value("ok", false) || !error.empty())) {
+                  if (error.empty()) error = reply ? reply->value("error", "learning setup failed") : "learning service unavailable";
+                  if (!learning_status_.is_object()) learning_status_ = {{"enabled", false}, {"paused", false}};
+                  learning_status_["installation"] = {{"state", "error"}}; learning_status_["last_error"] = error;
+              }
+          } }
         if (!reply || !reply->value("ok", false)) ++errors_;
         if (work.reply) work.reply->set_value(std::move(reply));
     }

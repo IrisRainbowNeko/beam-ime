@@ -117,15 +117,51 @@ struct TypedText {
         });
         option_connection = engine->context()->option_update_notifier().connect([this](::rime::Context * ctx, const std::string & name) {
             if (syncing) return;
-            if (name == "beam_learning") {
+            if (name == "beam_learning_install" && ctx->get_option(name)) {
+                client->post({{"op", "learning"}, {"action", "setup"}, {"confirm", true}});
+            } else if (name == "beam_learning") {
                 learning = ctx->get_option(name); paused = false;
                 client->post({{"op", "learning"}, {"action", learning ? "enable" : "disable"}});
                 ++generation;
-            } else if (name == "beam_learning_paused" && learning) {
+            } else if (name == "beam_learning_paused" && (learning || ctx->get_option("beam_learning_install"))) {
                 paused = ctx->get_option(name);
                 client->post({{"op", "learning"}, {"action", paused ? "pause" : "resume"}});
             }
         });
+        client->post({{"op", "learning"}, {"action", "status"}});
+    }
+
+    void sync(::rime::Engine * engine) {
+        if (!client) return;
+        auto status = client->learning_status();
+        if (!status.is_object()) return;
+        bool enabled = status["enabled"], is_paused = status["paused"];
+        if (learning != enabled || paused != is_paused) ++generation;
+        learning = enabled; paused = is_paused;
+        std::string state = status["installation"]["state"];
+        auto ctx = engine->context();
+        // Rime rebuilds the active composition on every option notification.
+        if (ctx->IsComposing()) return;
+        syncing = true;
+        if (ctx->get_option("beam_learning") != learning) ctx->set_option("beam_learning", learning);
+        if (ctx->get_option("beam_learning_paused") != paused) ctx->set_option("beam_learning_paused", paused);
+        if (ctx->get_option("beam_learning_install") != (state == "installing")) ctx->set_option("beam_learning_install", state == "installing");
+        if (ctx->get_property("beam_learning_error") != status["last_error"].get<std::string>())
+            ctx->set_property("beam_learning_error", status["last_error"]);
+        syncing = false;
+        if (auto config = engine->schema()->config()) {
+            if (auto switches = config->GetList("switches")) for (size_t i = 0; i < switches->size(); ++i) {
+                auto path = "switches/@" + std::to_string(i);
+                std::string name;
+                if (config->GetString(path + "/name", &name) && name == "beam_learning_install") {
+                    std::string previous, label = state == "error" ? "安装失败，点此重试" :
+                                                  state == "ready" ? "组件已安装，点击开启" : "下载并开启模型学习";
+                    if (!config->GetString(path + "/states/@0", &previous) || previous != label)
+                        config->SetString(path + "/states/@0", label);
+                    break;
+                }
+            }
+        }
     }
 
     void begin(::rime::Context * ctx) {
@@ -181,15 +217,11 @@ class BeamProcessor final : public ::rime::Processor {
         : ::rime::Processor(ticket), typed_(typed_text_for(ticket.engine)) {}
 
     ::rime::ProcessResult ProcessKeyEvent(const ::rime::KeyEvent & key) override {
-        if (key.release() || key.modifier() != 0 || !engine_) return ::rime::kNoop;
+        if (!engine_) return ::rime::kNoop;
         ::rime::Context * ctx = engine_->context();
-        if (!ctx || ctx->IsComposing()) return ::rime::kNoop;
-        if (typed_->client) {
-            typed_->syncing = true;
-            ctx->set_option("beam_learning", typed_->learning);
-            ctx->set_option("beam_learning_paused", typed_->paused);
-            typed_->syncing = false;
-        }
+        if (!ctx) return ::rime::kNoop;
+        typed_->sync(engine_);
+        if (key.release() || key.modifier() != 0 || ctx->IsComposing()) return ::rime::kNoop;
         if (key.keycode() == XK_Return || key.keycode() == XK_KP_Enter) {
             if (typed_->touch()) ctx->commit_history().clear();
             std::string turn = typed_->carry + history_text(ctx->commit_history());
@@ -246,7 +278,7 @@ class BeamTranslator final : public ::rime::Translator {
             if (!reply || !reply->value("ok", false) || !reply->contains("candidates") || !(*reply)["candidates"].is_array()) return nullptr;
             for (auto & candidate : (*reply)["candidates"]) if (candidate.is_string()) candidates.push_back(candidate);
             sources_ = reply->value("sources", std::vector<std::string>{});
-            typed_->learning = reply->value("learning_enabled", false); typed_->paused = reply->value("learning_paused", false);
+            typed_->sync(engine_);
             last_keys_ = keys;
             last_context_ = context;
             last_candidates_ = candidates;

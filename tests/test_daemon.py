@@ -125,6 +125,11 @@ sys.exit(75)
             'recipe':'beam-personal-r8-qvac-v1','prompt_version':'keys_llm_v1','backend':'vulkan',
             'executable':str(script),'pinyin':str(script),'replay':str(script)}))
         command('install',manifest=str(manifest))
+        command('disable')
+        self.assertFalse(self.call({'id': 1, 'op': 'learning', 'action': 'setup'})['ok'])
+        ready = command('setup', confirm=True)
+        self.assertTrue(ready['enabled'])
+        self.assertEqual(ready['installation']['state'], 'ready')
         self.call({'id':2,'op':'feedback','session':'progress','composition':'1','event_id':'progress:1',
                    'keys':'nihao','text':'你好'})
         try:
@@ -172,6 +177,90 @@ sys.exit(75)
         self.assertTrue(answer["beam_complete"])
         self.assertEqual(answer["candidates"], expected["candidates"])
         self.assertIn(top["candidates"][0], answer["candidates"])
+
+
+@unittest.skipUnless(os.environ.get('BEAM_TEST_MODEL') and os.name == 'posix', 'set BEAM_TEST_MODEL for real model tests')
+class LearningSetupIntegration(unittest.TestCase):
+    def test_background_install_disable_repeat_and_failure(self):
+        binary = Path(os.environ.get('BEAM_TEST_BINARY', 'build/release/bin/beamd')).resolve()
+        library = next(p for p in (binary.parent, binary.parent.parent/'lib/beam-ime', binary.parent.parent/'lib64/beam-ime')
+                       if (p/'libllama.so').exists())
+        with tempfile.TemporaryDirectory(prefix='beam-setup-') as temporary:
+            root = Path(temporary); app = root/'app'; app.mkdir()
+            shutil.copy2(binary, app/'beamd')
+            helper = app/'beamctl'
+            helper.write_text('''#!/usr/bin/env python3
+import json,os,socket,sys,time
+from pathlib import Path
+root=Path(__file__).parent.parent
+with (root/'attempts').open('a') as output: output.write('start\\n')
+while not (root/'finish').exists(): time.sleep(.02)
+if (root/'mode').read_text() == 'failure':
+    sys.exit('simulated download failure')
+with socket.socket(socket.AF_UNIX) as client:
+    client.connect(os.environ['BEAM_SOCKET'])
+    client.sendall((json.dumps({'id':1,'op':'learning','action':'install','manifest':str(root/'component.json')})+'\\n').encode())
+    with client.makefile('rb') as stream: result=json.loads(stream.readline())
+    if not result['ok']: sys.exit(result['error'])
+''')
+            helper.chmod(0o755)
+            for mode in ('success', 'disabled', 'failure'):
+                with self.subTest(mode=mode):
+                    (root/'mode').write_text(mode)
+                    (root/'finish').unlink(missing_ok=True); (root/'attempts').unlink(missing_ok=True)
+                    endpoint = str(root/(mode+'.sock'))
+                    def call(request):
+                        with socket.socket(socket.AF_UNIX) as client:
+                            client.settimeout(5); client.connect(endpoint)
+                            client.sendall((json.dumps({'id': 1, **request})+'\n').encode())
+                            with client.makefile('rb') as stream: return json.loads(stream.readline())
+                    def wait(predicate):
+                        deadline = time.monotonic()+15
+                        while time.monotonic()<deadline:
+                            status = call({'op':'health'})['learning']
+                            if predicate(status): return status
+                            time.sleep(.03)
+                        self.fail('installation state did not converge: '+json.dumps(status))
+                    with (root/(mode+'.log')).open('w') as log:
+                        process = subprocess.Popen([str(app/'beamd'), '--model', os.environ['BEAM_TEST_MODEL'],
+                            '--socket', endpoint, '--learning-dir', str(root/mode), '--backend-dir', str(library), '--ngl', '0'],
+                            env={**os.environ, 'LD_LIBRARY_PATH': str(library)+os.pathsep+os.environ.get('LD_LIBRARY_PATH', '')},
+                            stdout=subprocess.DEVNULL, stderr=log)
+                        try:
+                            for _ in range(200):
+                                if process.poll() is not None: self.fail('daemon exited during setup test')
+                                try:
+                                    status = call({'op':'health'})['learning']; break
+                                except OSError: time.sleep(.1)
+                            else: self.fail('setup daemon startup timed out')
+                            (root/'component.json').write_text(json.dumps({'schemaVersion':2,
+                                'base_sha256':status['base_sha256'], 'prompt_version':'keys_llm_v1', 'tokenizer':'gguf-embedded',
+                                'recipe':'beam-personal-r8-qvac-v1', 'backend':'vulkan',
+                                'executable':str(helper), 'replay':str(helper), 'pinyin':str(helper)}))
+                            self.assertFalse(call({'op':'learning','action':'setup'})['ok'])
+                            self.assertFalse((root/'attempts').exists())
+                            started = call({'op':'learning','action':'setup','confirm':True})
+                            self.assertTrue(started['ok'], started)
+                            self.assertEqual(started['learning']['installation']['state'], 'installing')
+                            self.assertTrue(call({'op':'learning','action':'setup','confirm':True})['ok'])
+                            self.assertTrue(call({'op':'query','keys':'nihao','beam_ms':0})['candidates'])
+                            if mode == 'disabled': call({'op':'learning','action':'disable'})
+                            (root/'finish').touch()
+                            status = wait(lambda s:s['installation']['state']!='installing')
+                            self.assertEqual(status['enabled'], mode == 'success')
+                            self.assertEqual((root/'attempts').read_text().splitlines(), ['start'])
+                            if mode != 'failure':
+                                self.assertEqual(status['installation']['state'], 'ready')
+                                self.assertTrue(status['trainer']['installed'])
+                                ready = call({'op':'learning','action':'setup','confirm':True})['learning']
+                                self.assertTrue(ready['enabled'])
+                                self.assertEqual((root/'attempts').read_text().splitlines(), ['start'])
+                            else:
+                                self.assertEqual(status['installation']['state'], 'error')
+                                self.assertIn('simulated download failure', status['last_error'])
+                                self.assertFalse(status['trainer']['installed'])
+                        finally:
+                            process.terminate(); process.wait(timeout=15)
 
 
 @unittest.skipUnless(os.environ.get('BEAM_TEST_ADAPTER') and os.environ.get('BEAM_TEST_MODEL') and os.name == 'posix',

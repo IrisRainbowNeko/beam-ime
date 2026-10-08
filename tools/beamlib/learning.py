@@ -13,8 +13,17 @@ from .model import sha256
 
 
 def install_component(manifest_path, destination, source=None, download=False):
-    manifest_path, destination = Path(manifest_path), Path(destination)
-    spec = json.loads(manifest_path.read_text(encoding='utf-8'))
+    destination = Path(destination)
+    if str(manifest_path).startswith('https://'):
+        if not download:
+            raise ValueError('use --download to allow learning component downloads')
+        with urllib.request.urlopen(str(manifest_path), timeout=60) as remote:
+            manifest_bytes = remote.read(65537)
+        if len(manifest_bytes) > 65536:
+            raise ValueError('learning manifest is too large')
+    else:
+        manifest_bytes = Path(manifest_path).read_bytes()
+    spec = json.loads(manifest_bytes.decode('utf-8-sig'))
     platform = 'windows-x86_64' if os.name == 'nt' else 'linux-x86_64'
     if spec.get('schemaVersion') != 2 or spec.get('platform') != platform or spec.get('backend') != 'vulkan':
         raise ValueError('incompatible learning component manifest')
@@ -22,7 +31,7 @@ def install_component(manifest_path, destination, source=None, download=False):
     if not isinstance(assets, list) or not assets:
         raise ValueError('learning manifest has no assets')
     destination.mkdir(parents=True, exist_ok=True)
-    identity = hashlib.sha256(manifest_path.read_bytes()).hexdigest()[:16]
+    identity = hashlib.sha256(manifest_bytes).hexdigest()[:16]
     final = destination / identity
     if (final / 'component.json').exists():
         return final / 'component.json'

@@ -7,7 +7,7 @@ on:
       tag:
         description: Existing version tag
         required: true
-        default: v0.2.0
+        default: v0.2.1
       ref:
         description: Optional source ref before the version tag is created
         required: false

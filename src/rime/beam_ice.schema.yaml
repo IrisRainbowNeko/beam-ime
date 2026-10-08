@@ -28,6 +28,7 @@ __patch:
   - rime_ice.custom:/patch?
   - beam_ice.custom:/patch?
   - engine/filters/@next: beam_filter
+  - switches/@next: { name: beam_learning_install, reset: 0, states: [ 下载并开启模型学习, 正在安装学习组件 ] }
   - switches/@next: { name: beam_learning, states: [ 学习关闭, 学习开启 ] }
   - switches/@next: { name: beam_learning_paused, states: [ 正常学习, 暂停学习 ] }
 

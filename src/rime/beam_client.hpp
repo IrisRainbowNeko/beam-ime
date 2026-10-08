@@ -50,6 +50,7 @@ class AsyncClient {
     ~AsyncClient();
     void post(nlohmann::json request);
     std::optional<nlohmann::json> query(nlohmann::json request, int timeout_ms);
+    nlohmann::json learning_status();
     uint64_t errors() const { return errors_.load(); }
  private:
     struct Work {
@@ -63,6 +64,8 @@ class AsyncClient {
     std::mutex mutex_;
     std::condition_variable available_;
     std::deque<Work> queue_;
+    nlohmann::json learning_status_;
+    size_t learning_pending_ = 0;
     std::atomic<uint64_t> errors_{0};
     bool stopping_ = false;
     std::thread thread_;

@@ -51,11 +51,45 @@ try {
     @{schemaVersion=2; platform='windows-x86_64';backend='vulkan';base_sha256='test';assets=@(@{
         filename='runtime.zip';size=(Get-Item -LiteralPath $archive).Length;sha256=(Get-FileHash -LiteralPath $archive).Hash.ToLower()
     })} | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $Manifest -Encoding UTF8
-    $installed=Install-LearningComponent
+    $workingDirectory=[Environment]::CurrentDirectory
+    try {
+        [Environment]::CurrentDirectory=$root
+        $installed=Install-LearningComponent
+        if ([Environment]::CurrentDirectory -ne $root) { throw 'archive extraction changed the process working directory' }
+    } finally { [Environment]::CurrentDirectory=$workingDirectory }
     if (-not (Test-Path -LiteralPath $installed)) { throw 'learning component was not installed' }
     Add-Type 'public static class BeamTestPath { [System.Runtime.InteropServices.DllImport("kernel32.dll",CharSet=System.Runtime.InteropServices.CharSet.Unicode)] public static extern uint GetFileAttributesW(string path); }'
     $longPath='\\?\'+(Join-Path (Split-Path $installed) ($longName.Replace('/','\')))
     if ([BeamTestPath]::GetFileAttributesW($longPath) -eq [uint32]::MaxValue) { throw 'long-path asset was not extracted' }
     if ((Install-LearningComponent) -ne $installed) { throw 'learning install is not idempotent' }
+    $fixture=Join-Path $root 'online helper'
+    [IO.Directory]::CreateDirectory((Join-Path $fixture 'models')) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../packaging/windows/beamctl.ps1') -Destination (Join-Path $fixture 'beamctl.ps1')
+    [IO.File]::WriteAllText((Join-Path $fixture 'models/default.json'),'{"learning":{"windows-x86_64":"https://example.test/learning.json"}}')
+    $spec=Get-Content -LiteralPath $Manifest -Raw -Encoding UTF8 | ConvertFrom-Json
+    $spec.assets[0] | Add-Member -NotePropertyName url -NotePropertyValue 'https://example.test/runtime.zip'
+    $script:manifestBytes=[Text.Encoding]::UTF8.GetBytes(($spec | ConvertTo-Json -Depth 5))
+    $script:archiveFixture=$archive
+    $script:downloads=New-Object 'Collections.Generic.List[string]'
+    function Invoke-WebRequest {
+        param($Uri,$OutFile,[switch]$UseBasicParsing,$TimeoutSec)
+        $script:downloads.Add($Uri)
+        if ($OutFile) { [IO.File]::Copy($script:archiveFixture,$OutFile) }
+        else {
+            $stream=New-Object IO.MemoryStream
+            $stream.Write($script:manifestBytes,0,$script:manifestBytes.Length)
+            [pscustomobject]@{RawContentStream=$stream}
+        }
+    }
+    . (Join-Path $fixture 'beamctl.ps1')
+    $state=Join-Path $root 'online learning state'
+    $Manifest=''; $Source=''; $Download=$true
+    $online=Install-LearningComponent
+    if (-not (Test-Path -LiteralPath $online)) { throw 'automatic learning download was not installed' }
+    if ((Install-LearningComponent) -ne $online) { throw 'automatic learning download was not idempotent' }
+    if (($script:downloads -join ',') -ne 'https://example.test/learning.json,https://example.test/runtime.zip,https://example.test/learning.json') {
+        throw 'automatic installer did not reuse the downloaded component'
+    }
+    Remove-Item Function:Invoke-WebRequest
     Write-Host 'Windows file transaction tests passed.'
 } finally { & cmd.exe /d /c "rmdir /s /q `"\\?\$root`"" }

@@ -159,7 +159,18 @@ int beamd_main(int argc, char ** argv) {
     fprintf(stderr, "beamd: %s on %s\n", engine.model_name().c_str(), listener.location.c_str());
     beam::LearningStore learning(learning_directory.empty() ? beam::learning_data_directory() : std::filesystem::u8path(learning_directory),
                                 std::filesystem::u8path(data_directory) / "pinyin.tsv");
-    beam::LearningRuntime runtime(learning, engine, options.model_path);
+    std::vector<std::string> installer;
+#ifdef _WIN32
+    wchar_t system_directory[MAX_PATH];
+    if (!GetSystemDirectoryW(system_directory, MAX_PATH)) throw std::runtime_error("cannot locate Windows system directory");
+    installer = {(std::filesystem::path(system_directory) / "WindowsPowerShell/v1.0/powershell.exe").u8string(),
+                 "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
+                 (executable.parent_path() / "beamctl.ps1").u8string(), "learn", "install", "-Download"};
+#else
+    installer = {"/usr/bin/env", "BEAM_SOCKET=" + listener.location,
+                 (executable.parent_path() / "beamctl").u8string(), "learn", "install", "--download"};
+#endif
+    beam::LearningRuntime runtime(learning, engine, options.model_path, std::move(installer));
 
     std::vector<Client> clients;
     uint64_t next_owner = 1;
@@ -253,6 +264,7 @@ int beamd_main(int argc, char ** argv) {
                     reply["greedy_ms"] = res.greedy_ms;
                     reply["beam_ms"] = res.beam_ms;
                     reply["beam_complete"] = res.beam_complete;
+                    reply["learning"] = runtime.status();
                     if (verbose)
                         fprintf(stderr, "query letters=%zu context=%s greedy=%.1fms beam=%.1fms%s\n", keys.size(),
                                 context.empty() ? "no" : "yes", res.greedy_ms, res.beam_ms,

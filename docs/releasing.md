@@ -7,8 +7,8 @@ Release packages 工作流从模型 manifest 的固定 URL 下载已发布模型
 Fedora 44 和 Windows 的轻量及离线包，并自动创建或更新 Release 草稿。
 发布者可直接在 GitHub 上公开该 Release。0.x 为开发阶段，版本号不附加 beta 后缀。
 
-自动打包：提交当前版本后推送 `v0.2.0` 标签，会启动 `Release packages` 工作流。
-也可在 Actions 中手动运行：`tag` 填 `v0.2.0`，`ref` 填包含该版本代码的分支或提交。
+自动打包：提交当前版本后推送 `v0.2.1` 标签，会启动 `Release packages` 工作流。
+也可在 Actions 中手动运行：`tag` 填 `v0.2.1`，`ref` 填包含该版本代码的分支或提交。
 三个 Linux 系统和 Windows 的程序包、离线包、Vulkan 学习组件、源码与校验和会汇总到同一份 Release 草稿。
 各构建任务也提供 Actions artifacts，可在草稿生成前单独下载。
 
@@ -27,4 +27,6 @@ Fedora 44 和 Windows 的轻量及离线包，并自动创建或更新 Release �
 Linux/Windows 的 Vulkan manifest 和对应 ZIP；三个 Linux 发行版共享在 Ubuntu 24.04 构建的 Linux 学习组件。
 Release 工作流构建 QVAC 原生运行时，复用发布 GGUF，不打包 Python、PyTorch、CUDA runtime 或训练 checkpoint。
 普通包包含拼音资源、SQLite 和 adapter 推理，安装组件由用户显式确认。
+只更新安装入口时可复用已发布组件：在 `models/default.json` 的 `learning` 中固定其 manifest URL，
+发布说明链接同一份旧版 manifest 和 ZIP；无需为程序版本重复上传组件。
 本地包可用 `--output-dir /path/dist` 改变输出目录，Windows 可用 `--build /path/cross-build` 指向 `out/` 与 `symbols/`。

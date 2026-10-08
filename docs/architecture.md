@@ -34,15 +34,19 @@ Linux 使用用户私有 Unix socket，默认 `$XDG_RUNTIME_DIR/beam-ime/beamd.s
 自定义兼容模型可通过 Linux setup 的 `--model` 或手动调整 Windows 启动参数使用。
 ## 本地学习接口
 
+整体流程见 [学习系统流程图](images/learning-system.drawio.png)，也提供 [可编辑版本](images/learning-system.drawio)。
+
 JSON-lines 协议仍为 v1，`query.candidates` 保持字符串数组。新响应附带同序 `sources`
 （`model` 或 `personal`）、`personalization_revision`、`learning_enabled` 和 `learning_paused`。
-`health.learning` 返回状态、样本计数、训练进度与适配器元数据，不返回训练文本。
+`health.learning` 与 `query.learning` 返回状态、样本计数、训练进度、组件安装状态与适配器元数据，不返回训练文本。
 
 - `composition`：`session`、`composition`、`state`（`begin/activity/end/cancel`）。连接断开会结束其活跃组词。
 - `feedback`：`session`、`composition`、`event_id`、`keys`、`text`，可附 `context`、`first` 和 `parts:[{keys,text,first}]`。
   只在实际提交时发送。事件 ID 去重，关闭或暂停时不采集，取消的片段不产生反馈。
-- `learning`：`action` 为 `enable/disable/pause/resume/status/train/rollback/reset/install`；
+- `learning`：`action` 为 `enable/disable/pause/resume/status/train/rollback/reset/install/setup`；
   `reset` 需要 `confirm:true`，`install` 提供本机已安装组件的 `manifest` 路径。
+  `setup` 需要 `confirm:true`，后台调用用户态安装器下载固定版本组件并自动开启；
+  `installation.state` 为 `not_installed/installing/ready/error`。重复请求合并，关闭、暂停或清空会取消安装后的自动开启。
 
 上屏反馈与查询共用后台顺序连接，UI 线程不做网络写入或数据库操作。daemon 是 SQLite 唯一写入者。
 训练进程读取固定任务快照，使用文件发布进度和产物；输入活动请求 microbatch 边界暂停。
