@@ -37,10 +37,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libx11-dev libvulkan-dev glslc spirv-headers python3-yaml libsqlite3-dev libssl-dev
+      - run: sudo apt-get update && sudo apt-get install -y build-essential cmake ninja-build git pkg-config libboost-all-dev nlohmann-json3-dev librime-dev libgoogle-glog-dev libx11-dev libvulkan-dev glslc spirv-headers python3-yaml libsqlite3-dev libssl-dev bubblewrap
       - run: python3 -m pip install pypinyin==0.55.0
       - run: bash tools/build.sh release
         env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
+      - name: Rime bilingual mode and commit isolation
+        run: |
+          cmake --build build/release --target rime_smoke
+          BEAM_TEST_RIME_BUILD="$PWD/build/release" python3 -m unittest discover -s tests -p test_rime_translation.py -v
       - run: python3 tools/package_linux.py --format deb
       - run: sudo apt-get install -y ./dist/*.deb && beamd --version && beamctl doctor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

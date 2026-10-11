@@ -36,6 +36,9 @@ struct Engine::Impl {
     EngineOptions options;
     std::string name;
     std::string backend = "cpu";
+    std::string prompt_version = kPromptV1;
+    InputMode mode = InputMode::Ime;
+    bool greedy_finished = false;
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
     const llama_vocab * vocab = nullptr;
@@ -90,6 +93,16 @@ struct Engine::Impl {
             model = llama_model_load_from_file(o.model_path.c_str(), mp);
         }
         if (!model) return;
+        char version[64];
+        int length = llama_model_meta_val_str(model, "beam.prompt_version", version, sizeof(version));
+        if (length > 0) {
+            if (length >= (int)sizeof(version)) { llama_model_free(model); model = nullptr; throw std::runtime_error("unsupported prompt version"); }
+            prompt_version.assign(version, length);
+            if (prompt_version != kPromptV1 && prompt_version != kPromptV2) {
+                llama_model_free(model); model = nullptr;
+                throw std::runtime_error("unsupported prompt version");
+            }
+        }
         if (mp.n_gpu_layers > 0) {
             auto device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
             if (!device) device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
@@ -184,6 +197,7 @@ struct Engine::Impl {
         llama_memory_clear(mem, true);
         cached.clear();
         greedy_out.clear();
+        greedy_finished = false;
     }
 
     // Top-1 with KV prefix reuse; the previous Top-1 is verified as a draft in the same batch.
@@ -221,6 +235,7 @@ struct Engine::Impl {
             next = argmax(llama_get_logits_ith(ctx, 0));
         }
         greedy_out = out;
+        greedy_finished = stops(next);
         return true;
     }
 
@@ -335,6 +350,8 @@ Engine::~Engine() = default;
 bool Engine::ok() const { return impl_->ctx != nullptr; }
 const std::string & Engine::model_name() const { return impl_->name; }
 const std::string & Engine::backend_name() const { return impl_->backend; }
+const std::string & Engine::prompt_version() const { return impl_->prompt_version; }
+bool Engine::supports(InputMode mode) const { return mode == InputMode::Ime || impl_->prompt_version == kPromptV2; }
 
 bool Engine::set_adapter(const std::string & path, std::string & error) {
     auto & m = *impl_;
@@ -360,8 +377,9 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
     std::string keys = normalize_keys(raw_keys);
     if (keys.empty() || !ok()) return result;
     std::string c = utf8_tail(context, (size_t) m.options.context_chars);
-    std::string prompt = (c.empty() ? "" : "上文：" + c + "\n") + "按键：" + spaced(keys) + "\n结果：";
-    int max_new = 2 * letter_count(keys) + 8;
+    if (m.mode != options.mode) { m.reset_cache(); m.prompt_toks.clear(); m.first_logits.clear(); m.mode = options.mode; }
+    std::string prompt = task_prompt(keys, c, options.mode, m.prompt_version);
+    int max_new = output_budget(options.mode, letter_count(keys));
 
     auto t0 = Clock::now();
     if (!m.greedy(prompt, max_new)) return result;
@@ -377,8 +395,9 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
             // Candidates differing only in English letter case collapse to the best-ranked casing.
             for (auto & [s, text] : fin) {
                 if ((int) ranked.size() >= options.max_candidates) break;
-                std::string f = fold_case(text);
-                if (aligns(text, keys) && std::find(folded.begin(), folded.end(), f) == folded.end()) {
+                auto parsed = parse_candidate(text, keys, options.mode);
+                std::string f = parsed ? (options.mode == InputMode::Ime ? fold_case(parsed->text) : parsed->text) : "";
+                if (parsed && std::find(folded.begin(), folded.end(), f) == folded.end()) {
                     ranked.push_back(text);
                     folded.push_back(f);
                 }
@@ -387,14 +406,20 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
         }
         result.beam_ms = ms_since(t1);
     }
-    if (aligns(top, keys) && std::find(folded.begin(), folded.end(), fold_case(top)) == folded.end()) {
+    auto parsed_top = options.mode == InputMode::TranslateEn && !m.greedy_finished ? std::nullopt : parse_candidate(top, keys, options.mode);
+    auto top_id = parsed_top ? (options.mode == InputMode::Ime ? fold_case(parsed_top->text) : parsed_top->text) : "";
+    if (parsed_top && std::find(folded.begin(), folded.end(), top_id) == folded.end()) {
         if (ranked.empty()) ranked.push_back(top);
         else {
             if ((int) ranked.size() >= options.max_candidates) ranked.pop_back();
             ranked.push_back(top);
         }
     }
-    result.candidates = ranked;
+    for (const auto & text : ranked) {
+        auto candidate = parse_candidate(text, keys, options.mode);
+        result.candidates.push_back(candidate->text);
+        result.comments.push_back(candidate->comment);
+    }
     return result;
 }
 

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "keys.hpp"
 #include "protocol.hpp"
+#include "task.hpp"
 #include "beam_client.hpp"
 #include <iostream>
 #include <stdexcept>
@@ -16,8 +17,21 @@ int main() {
     check(!aligns("使用Linux", "sylinu"), "English must match");
     check(!aligns("hello  world", "helloworld"), "repeated spaces");
     check(fold_case("你好GPT") == "你好gpt", "case folding");
+    check(task_prompt("mtj", "", InputMode::TranslateEn, kPromptV2) == "任务：译英\n按键：m t j\n结果：", "translation prompt");
+    check(task_prompt("nh", "", InputMode::Ime, kPromptV1) == "按键：n h\n结果：", "legacy prompt");
+    auto translated = parse_candidate("See you tomorrow.\t明天见", "mtj", InputMode::TranslateEn);
+    check(translated && translated->text == "See you tomorrow." && translated->comment == "明天见", "paired translation");
+    check(bool(parse_candidate("3:30\t三点半", "sdb", InputMode::TranslateEn)), "numeric translation");
+    for (auto text : {"Hello", "\t你好", "Hi\t你好\textra", "Hi\t你好\n", "Hi\t使用Linux"})
+        check(!parse_candidate(text, "nh", InputMode::TranslateEn), "reject incomplete translation");
+    check(output_budget(InputMode::TranslateEn, 40) == 192 && output_budget(InputMode::Ime, 10) == 28, "task budgets");
     auto request = nlohmann::json::parse(R"({"id":1,"op":"query","keys":"nh"})");
     check(validate_request(request).empty(), "valid request");
+    request["mode"] = "translate_en";
+    check(validate_request(request).empty(), "translation request");
+    request["mode"] = "bad";
+    check(validate_request(request) == "invalid_mode", "unknown mode");
+    request.erase("mode");
     request["keys"] = std::string(41, 'a');
     check(validate_request(request) == "invalid_keys", "long input");
     request["keys"] = "nh";

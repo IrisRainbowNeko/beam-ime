@@ -60,9 +60,7 @@ int run(int argc, char ** argv) {
         if (argv[i][0] == '@') {
             bool on = argv[i][1] != '!';
             rime->set_option(session, argv[i] + (on ? 1 : 2), on);
-            continue;
-        }
-        rime->simulate_key_sequence(session, argv[i]);
+        } else rime->simulate_key_sequence(session, argv[i]);
         RIME_STRUCT(RimeCommit, commit);
         if (rime->get_commit(session, &commit)) {
             printf("[%s] commit: %s\n", argv[i], commit.text);

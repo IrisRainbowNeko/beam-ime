@@ -11,7 +11,7 @@ import urllib.request
 
 def read_manifest(path):
     value = json.loads(Path(path).read_text(encoding="utf-8"))
-    if value.get("schemaVersion") != 1 or value.get("promptVersion") != "keys_llm_v1":
+    if value.get("schemaVersion") != 1 or value.get("promptVersion") not in ("keys_llm_v1", "keys_llm_v2"):
         raise ValueError("unsupported model manifest or prompt version")
     if not re.fullmatch(r"[A-Za-z0-9._-]+\.gguf", value.get("filename", "")):
         raise ValueError("invalid model filename")

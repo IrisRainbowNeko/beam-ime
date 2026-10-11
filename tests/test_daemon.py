@@ -54,6 +54,23 @@ class DaemonIntegration(unittest.TestCase):
             answer=self.call({"id":3,"op":"query","keys":"nihao","context":context,"beam_ms":0})
             self.assertTrue(answer["ok"])
             self.assertTrue(answer["candidates"])
+            self.assertEqual(answer['mode'], 'ime')
+            self.assertEqual(answer['comments'], [''] * len(answer['candidates']))
+
+    def test_mode_capability_and_invalid_mode(self):
+        health = self.call({'id': 1, 'op': 'health'})
+        self.assertIn(health['prompt_version'], ('keys_llm_v1', 'keys_llm_v2'))
+        self.assertIn('ime', health['modes'])
+        for mode in ('invalid', None, 1):
+            self.assertEqual(self.call({'id': 2, 'op': 'query', 'keys': 'nh', 'mode': mode})['error'], 'invalid_mode')
+        reply = self.call({'id': 3, 'op': 'query', 'keys': 'nihao', 'mode': 'translate_en', 'beam_ms': 0})
+        self.assertEqual(reply['mode'], 'translate_en')
+        if health['prompt_version'] == 'keys_llm_v1':
+            self.assertEqual(reply['error'], 'unsupported_mode')
+        else:
+            self.assertTrue(reply['ok'])
+            self.assertEqual(len(reply['candidates']), len(reply['comments']))
+        self.assertTrue(self.call({'id': 4, 'op': 'query', 'keys': 'nihao', 'beam_ms': 0})['candidates'])
 
     def test_learning_feedback_lifecycle(self):
         event = {'op': 'feedback', 'session': 'test', 'composition': '1', 'event_id': 'test:1',

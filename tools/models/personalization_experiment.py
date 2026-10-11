@@ -241,7 +241,7 @@ def metrics(cases):
 
 
 def encode(tokenizer, row):
-    prompt = build_prompt(row["keys"], row.get("context", "")[-64:]) + "结果："
+    prompt = build_prompt(row["keys"], row.get("context", "")[-64:], version="keys_llm_v1") + "结果："
     prefix = tokenizer(prompt, add_special_tokens=False)["input_ids"]
     target = tokenizer(row["target"], add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
     return {"input_ids": prefix + target, "labels": [-100] * len(prefix) + target}
@@ -322,7 +322,7 @@ def generate(model, tokenizer, rows, beams=5, batch_size=12):
     with torch.no_grad():
         for start in range(0, len(order), batch_size):
             indices = order[start:start + batch_size]
-            prompts = [build_prompt(rows[i]["keys"], rows[i].get("context", "")[-64:]) + "结果：" for i in indices]
+            prompts = [build_prompt(rows[i]["keys"], rows[i].get("context", "")[-64:], version="keys_llm_v1") + "结果：" for i in indices]
             encoded = tokenizer(prompts, add_special_tokens=False, padding=True, return_tensors="pt").to(model.device)
             tokens = model.generate(**encoded, num_beams=beams, num_return_sequences=beams, do_sample=False,
                                     max_new_tokens=2 * max(len(letters(rows[i]["keys"])) for i in indices) + 8,

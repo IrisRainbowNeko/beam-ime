@@ -1,13 +1,26 @@
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
-from beamlib.model import install
+from beamlib.model import install, read_manifest
 from beamlib.config import schema_entry
 import yaml
 
 
 class ModelTests(unittest.TestCase):
+    def test_dual_task_manifest(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = Path(root) / 'model.json'
+            value = {'schemaVersion': 1, 'promptVersion': 'keys_llm_v2', 'modes': ['ime', 'translate_en'],
+                     'filename': 'test.gguf', 'sha256': 'a' * 64, 'size': 42, 'url': 'https://example.org/test.gguf'}
+            path.write_text(json.dumps(value))
+            self.assertEqual(read_manifest(path)['modes'], ['ime', 'translate_en'])
+            value['promptVersion'] = 'unknown'
+            path.write_text(json.dumps(value))
+            with self.assertRaises(ValueError):
+                read_manifest(path)
+
     def test_failed_import_preserves_model(self):
         with tempfile.TemporaryDirectory() as root:
             source, target = Path(root)/"source", Path(root)/"model.gguf"

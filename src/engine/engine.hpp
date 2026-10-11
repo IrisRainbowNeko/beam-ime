@@ -6,6 +6,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include "task.hpp"
 
 namespace beam {
 
@@ -19,12 +20,14 @@ struct EngineOptions {
 };
 
 struct QueryOptions {
+    InputMode mode = InputMode::Ime;
     int max_candidates = 5;
     int beam_budget_ms = 150; // 0 disables the beam; on timeout only the Top-1 is returned
 };
 
 struct QueryResult {
     std::vector<std::string> candidates;  // best first
+    std::vector<std::string> comments;
     double greedy_ms = 0;
     double beam_ms = 0;
     bool beam_complete = false;
@@ -40,6 +43,8 @@ class Engine {
     bool ok() const;
     const std::string & model_name() const;
     const std::string & backend_name() const;
+    const std::string & prompt_version() const;
+    bool supports(InputMode mode) const;
     bool set_adapter(const std::string & path, std::string & error);
     // keys: raw input letters ("nhsj", "ni'hao"); context: text the user typed before, any length.
     QueryResult query(const std::string & keys, const std::string & context, const QueryOptions & options);

@@ -235,6 +235,8 @@ int beamd_main(int argc, char ** argv) {
                     reply["protocol"] = kProtocol;
                     reply["version"] = BEAM_VERSION;
                     reply["backend"] = engine.backend_name();
+                    reply["prompt_version"] = engine.prompt_version();
+                    reply["modes"] = engine.supports(beam::InputMode::TranslateEn) ? json::array({"ime", "translate_en"}) : json::array({"ime"});
                     reply["learning"] = runtime.status();
                 } else if (op == "learning") {
                     reply["learning"] = runtime.command(req); reply["ok"] = true;
@@ -247,6 +249,12 @@ int beamd_main(int argc, char ** argv) {
                     if (r != newest_query) continue;
                     runtime.activity();
                     beam::QueryOptions q;
+                    q.mode = beam::input_mode(req.value("mode", "ime"));
+                    reply["mode"] = beam::mode_name(q.mode);
+                    if (!engine.supports(q.mode)) {
+                        reply["ok"] = false; reply["error"] = "unsupported_mode";
+                        send_line(c.socket, reply); continue;
+                    }
                     q.max_candidates = std::clamp(req.value("max", 5), 1, 10);
                     q.beam_budget_ms = std::clamp(req.value("beam_ms", beam_ms), 0, 2000);
                     std::string keys = req.value("keys", "");
@@ -260,7 +268,21 @@ int beamd_main(int argc, char ** argv) {
                         continue;
                     }
                     reply["ok"] = true;
-                    reply.update(learning.rank(keys, context, res.candidates, (size_t)q.max_candidates));
+                    if (q.mode == beam::InputMode::Ime) {
+                        reply.update(learning.rank(keys, context, res.candidates, (size_t)q.max_candidates));
+                        reply["comments"] = std::vector<std::string>(reply["candidates"].size());
+                    } else {
+                        auto ranked = learning.rank(keys, context, res.comments, res.comments.size(), false);
+                        json texts = json::array(), comments = json::array(), sources = json::array();
+                        for (size_t i = 0; i < ranked["candidates"].size(); ++i) {
+                            for (size_t j = 0; j < res.comments.size(); ++j) {
+                                if (beam::fold_case(res.comments[j]) != beam::fold_case(ranked["candidates"][i])) continue;
+                                texts.push_back(res.candidates[j]); comments.push_back(res.comments[j]);
+                                sources.push_back(ranked["sources"][i]);
+                            }
+                        }
+                        reply.update(ranked); reply["candidates"] = texts; reply["comments"] = comments; reply["sources"] = sources;
+                    }
                     reply["greedy_ms"] = res.greedy_ms;
                     reply["beam_ms"] = res.beam_ms;
                     reply["beam_complete"] = res.beam_complete;

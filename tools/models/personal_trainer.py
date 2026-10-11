@@ -59,10 +59,12 @@ def variants(sample):
     return result
 
 
-def encode(tokenizer, sample):
-    prompt = build_prompt(sample['keys'], sample.get('context', '')[-64:]) + '结果：'
+def encode(tokenizer, sample, version='keys_llm_v1'):
+    mode = sample.get('mode', 'ime')
+    prompt = build_prompt(sample['keys'], sample.get('context', '')[-64:], mode, version) + '结果：'
     prefix = tokenizer(prompt, add_special_tokens=False)['input_ids']
-    suffix = tokenizer(sample['target'], add_special_tokens=False)['input_ids'] + [tokenizer.eos_token_id]
+    target = sample['translation'] + '\t' + sample['target'] if mode == 'translate_en' else sample['target']
+    suffix = tokenizer(target, add_special_tokens=False)['input_ids'] + [tokenizer.eos_token_id]
     return {'input_ids': prefix + suffix, 'labels': [-100] * len(prefix) + suffix}
 
 
@@ -71,7 +73,9 @@ def select_step(recent, history, references, seed, step):
     chosen = rng.choices(recent, k=8) + rng.choices(history or recent, k=4)
     # Sample events first, so a commit with many segments gets no extra weight.
     personal = [rng.choice(rng.choice(event['samples'])['variants']) for event in chosen]
-    return personal + rng.choices(references, k=4)
+    guards = ([rng.choice(references['generic']), rng.choice(references['collision'] or references['generic']),
+               *rng.choices(references['translation'], k=2)] if isinstance(references, dict) else rng.choices(references, k=4))
+    return personal + guards
 
 
 def run_job(job_path):
@@ -83,6 +87,7 @@ def run_job(job_path):
     job = json.loads(job_path.read_text(encoding='utf-8'))
     root = Path(job['directory'])
     component = job['component']
+    prompt_version = component.get('prompt_version', 'keys_llm_v1')
     os.environ['HF_HUB_OFFLINE'] = '1'
     os.environ['TOKENIZERS_PARALLELISM'] = 'false'
     if os.name == 'posix':
@@ -125,16 +130,19 @@ def run_job(job_path):
     recent, history = job['recent'], job['history']
     for event in recent + history:
         for sample in event['samples']:
-            sample['variants'] = [encode(tokenizer, item) for item in variants(sample)]
+            sample['variants'] = [encode(tokenizer, item, prompt_version) for item in variants(sample)]
 
     replay_rows = json.loads(Path(component['replay']).read_text(encoding='utf-8'))
     if not isinstance(replay_rows, list) or len(replay_rows) < 16:
         raise ValueError('The component must contain at least 16 generic replay examples.')
     replay_rows = replay_rows[:256]
+    if prompt_version == 'keys_llm_v1':
+        replay_rows = [r for r in replay_rows if r.get('mode', 'ime') == 'ime']
     progress('collision_replay')
     anchor_path = root / 'anchors.json'
     saved_anchors = json.loads(anchor_path.read_text(encoding='utf-8')) if anchor_path.exists() else {'cursor': 0, 'rows': []}
-    contexts = list(dict.fromkeys(r.get('context', '')[-64:] for r in replay_rows if len(r.get('context', '')) >= 8))[:12]
+    contexts = list(dict.fromkeys(r.get('context', '')[-64:] for r in replay_rows
+                                  if r.get('mode', 'ime') == 'ime' and len(r.get('context', '')) >= 8))[:12]
     terms, codes = set(), []
     for event in recent:
         for sample in event['samples']:
@@ -153,7 +161,7 @@ def run_job(job_path):
         if paused():
             return 75
         keys, context = queries[index]
-        prefix = tokenizer(build_prompt(keys, context) + '结果：', add_special_tokens=False, return_tensors='pt').to(device)
+        prefix = tokenizer(build_prompt(keys, context, version=prompt_version) + '结果：', add_special_tokens=False, return_tensors='pt').to(device)
         with torch.no_grad():
             output = base.generate(**prefix, num_beams=5, num_return_sequences=5, do_sample=False,
                                    max_new_tokens=2 * len(keys) + 8, use_cache=True,
@@ -169,12 +177,13 @@ def run_job(job_path):
     progress('teacher_cache')
     cache_root = root.parent.parent / 'teacher-cache' / job['base_sha256']
     cache_root.mkdir(parents=True, exist_ok=True)
-    generic, anchors = [], []
-    for rows, encoded in ((replay_rows, generic), (saved_anchors['rows'], anchors)):
+    generic, anchors, translations = [], [], []
+    for rows, encoded in (([r for r in replay_rows if r.get('mode', 'ime') == 'ime'], generic),
+                          ([r for r in replay_rows if r.get('mode') == 'translate_en'], translations), (saved_anchors['rows'], anchors)):
         for sample in rows:
             if paused():
                 return 75
-            value = encode(tokenizer, sample)
+            value = encode(tokenizer, sample, prompt_version)
             digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
             path = cache_root / (digest + '.pt')
             if path.exists():
@@ -192,6 +201,10 @@ def run_job(job_path):
                 os.replace(temporary, path)
             encoded.append({**value, **teacher})
     references = generic + (anchors * max(1, round(len(generic) / len(anchors))) if anchors else [])
+    if prompt_version == 'keys_llm_v2':
+        if not translations:
+            raise ValueError('keys_llm_v2 replay requires translated examples')
+        references = {'generic': generic, 'collision': anchors, 'translation': translations}
 
     state_pointer = root / 'resume.json'
     saved = json.loads(state_pointer.read_text(encoding='utf-8')) if state_pointer.exists() else None
@@ -281,7 +294,7 @@ def run_job(job_path):
     os.replace(output.with_suffix('.tmp'), output)
     manifest = {'id': job['id'], 'path': str(output), 'checkpoint': str(destination / 'checkpoint'),
                 'base_sha256': job['base_sha256'], 'tokenizer_sha256': actual_tokenizer,
-                'prompt_version': 'keys_llm_v1', 'rank': 8, 'alpha': 16, 'recipe': RECIPE,
+                'prompt_version': prompt_version, 'rank': 8, 'alpha': 16, 'recipe': RECIPE,
                 'clock': job['clock'], 'training_seconds': time.monotonic() - started}
     atomic_json(destination / 'manifest.json', manifest)
     atomic_json(root / 'result.json', manifest)

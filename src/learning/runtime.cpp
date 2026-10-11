@@ -217,7 +217,7 @@ struct LearningRuntime::Impl {
     }
     void publish(const Json & manifest) {
         auto component = store.setting("trainer", Json::object());
-        if (manifest.value("base_sha256", "") != fingerprint || manifest.value("prompt_version", "") != "keys_llm_v1" ||
+        if (manifest.value("base_sha256", "") != fingerprint || manifest.value("prompt_version", "") != engine.prompt_version() ||
             manifest.value("tokenizer", "") != "gguf-embedded" || manifest.value("rank", 0) != 8 ||
             manifest.value("alpha", 0) != 16 || manifest.value("recipe", "") != component.value("recipe", ""))
             throw std::runtime_error("adapter metadata does not match this model and trainer");
@@ -422,7 +422,7 @@ Json LearningRuntime::command(const Json & request) {
         auto path = std::filesystem::absolute(std::filesystem::u8path(request.at("manifest").get<std::string>()));
         auto component = read_json(path);
         if (component.value("schemaVersion", 0) != 2 || component.value("base_sha256", "") != m.fingerprint ||
-            component.value("prompt_version", "") != "keys_llm_v1" || component.value("tokenizer", "") != "gguf-embedded" ||
+            component.value("prompt_version", "") != m.engine.prompt_version() || component.value("tokenizer", "") != "gguf-embedded" ||
             component.value("recipe", "") != "beam-personal-r8-qvac-v1" ||
             (component.value("backend", "") != "cpu" && component.value("backend", "") != "vulkan"))
             throw std::runtime_error("learning component is incompatible with this model");

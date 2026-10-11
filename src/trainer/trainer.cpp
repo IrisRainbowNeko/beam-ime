@@ -2,6 +2,7 @@
 #include "loss.hpp"
 #include "store.hpp"
 #include "keys.hpp"
+#include "task.hpp"
 #include "llama.h"
 #include "llama-adapter.h"
 #include "ggml-backend.h"
@@ -92,7 +93,7 @@ using Context = std::unique_ptr<llama_context, decltype(&llama_free)>;
 struct Trainer {
     Json job, component, samples, schedule;
     fs::path root, learning, cache;
-    std::string base_hash, backend;
+    std::string base_hash, backend, prompt_version;
     beam::Pronunciations pronunciation;
     Model model{nullptr, llama_model_free};
     Context context{nullptr, llama_free};
@@ -107,8 +108,9 @@ struct Trainer {
         : job(read_json(path)), component(job.at("component")),
           root(fs::u8path(job.at("directory").get<std::string>())), learning(root.parent_path().parent_path()),
           pronunciation(fs::u8path(component.at("pinyin").get<std::string>())) {
+        prompt_version = component.value("prompt_version", "");
         if (component.value("schemaVersion", 0) != 2 || component.value("recipe", "") != recipe ||
-            component.value("prompt_version", "") != "keys_llm_v1") throw std::runtime_error("incompatible trainer component");
+            (prompt_version != beam::kPromptV1 && prompt_version != beam::kPromptV2)) throw std::runtime_error("incompatible trainer component");
         backend = component.at("backend");
         if (backend != "vulkan" && backend != "cpu") throw std::runtime_error("unsupported training backend");
         std::ifstream input(fs::u8path(job.at("model").get<std::string>()), std::ios::binary);
@@ -116,7 +118,7 @@ struct Trainer {
         base_hash = digest(input);
         if (base_hash != job.at("base_sha256") || base_hash != component.at("base_sha256"))
             throw std::runtime_error("training base does not match the inference GGUF");
-        cache = learning / "teacher-cache" / base_hash / recipe;
+        cache = learning / "teacher-cache" / base_hash / recipe / prompt_version;
         fs::create_directories(cache);
         std::vector<fs::directory_entry> entries;
         uintmax_t size = 0;
@@ -146,16 +148,17 @@ struct Trainer {
         tokens.resize(n); return tokens;
     }
     std::string prompt(const Json & row) const {
-        auto text = beam::utf8_tail(row.value("context", ""), 64);
-        return (text.empty() ? "" : "上文：" + text + "\n") + "按键：" + beam::spaced(beam::normalize_keys(row.at("keys"))) + "\n结果：";
+        return beam::task_prompt(row.at("keys"), row.value("context", ""), beam::input_mode(row.value("mode", "ime")), prompt_version);
     }
     Json encode(const Json & row) const {
-        auto prefix = tokenize(prompt(row)), target = tokenize(row.at("target"));
+        std::string output = row.at("target");
+        if (row.value("mode", "ime") == "translate_en") output = row.at("translation").get<std::string>() + "\t" + output;
+        auto prefix = tokenize(prompt(row)), target = tokenize(output);
         target.push_back(llama_vocab_eos(vocab));
         const size_t start = prefix.size();
         prefix.insert(prefix.end(), target.begin(), target.end());
-        if (start == 0 || prefix.size() > 256) throw std::runtime_error("learning example exceeds model input limit");
-        return {{"tokens", prefix}, {"start", start}, {"target_count", target.size()}};
+        if (start == 0 || prefix.size() > 512) throw std::runtime_error("learning example exceeds model input limit");
+        return {{"tokens", prefix}, {"start", start}, {"target_count", target.size()}, {"mode", row.value("mode", "ime")}};
     }
     Json variants(const Json & row) const {
         Json result = Json::array({row});
@@ -195,9 +198,13 @@ struct Trainer {
         params.use_extra_bufts = false;
         model.reset(llama_model_load_from_file(job.at("model").get<std::string>().c_str(), params));
         if (!model) throw std::runtime_error("cannot load the inference GGUF for training");
+        char version[64]{};
+        int n = llama_model_meta_val_str(model.get(), "beam.prompt_version", version, sizeof(version));
+        if (n >= (int)sizeof(version) || (n <= 0 ? std::string(beam::kPromptV1) : std::string(version, n)) != prompt_version)
+            throw std::runtime_error("component prompt does not match the GGUF");
         vocab = llama_model_get_vocab(model.get());
         loss.top_count = std::min(32, llama_vocab_n_tokens(vocab));
-        create_context(256, false);
+        create_context(512, false);
     }
     void decode(const std::vector<llama_token> & tokens, bool all_logits) {
         llama_memory_clear(llama_get_memory(context.get()), true);
@@ -271,6 +278,7 @@ struct Trainer {
         std::vector<std::string> contexts, codes;
         std::set<std::string> terms;
         for (const auto & row : replay) {
+            if (row.value("mode", "ime") != "ime") continue;
             auto value = beam::utf8_tail(row.value("context", ""), 64);
             if (beam::utf8_chars(value).size() >= 8 && std::find(contexts.begin(), contexts.end(), value) == contexts.end()) contexts.push_back(value);
             if (contexts.size() == 12) break;
@@ -328,8 +336,15 @@ struct Trainer {
         };
         const auto recent = pool(job.at("recent")), history = pool(job.at("history"));
         if (recent.empty()) throw std::runtime_error("training snapshot contains no recent events");
-        std::vector<size_t> generic, collisions;
-        for (const auto & row : replay) { generic.push_back(samples.size()); samples.push_back(teacher(row)); }
+        std::vector<size_t> generic, collisions, translations;
+        for (const auto & row : replay) {
+            auto mode = beam::input_mode(row.value("mode", "ime"));
+            if (mode == beam::InputMode::TranslateEn && prompt_version == beam::kPromptV1) continue;
+            auto & pool = mode == beam::InputMode::Ime ? generic : translations;
+            pool.push_back(samples.size()); samples.push_back(teacher(row));
+        }
+        if (generic.empty() || (prompt_version == beam::kPromptV2 && translations.empty()))
+            throw std::runtime_error("component is missing task replay examples");
         for (const auto & row : collision) { collisions.push_back(samples.size()); samples.push_back(teacher(row)); }
         std::mt19937 random((uint32_t)std::stoul(digest(job.at("id").get<std::string>()).substr(0, 8), nullptr, 16));
         auto pick = [&](const auto & values) -> const auto & { return values[random() % values.size()]; };
@@ -340,7 +355,10 @@ struct Trainer {
                 const auto & events = i < 8 || history.empty() ? recent : history;
                 selected.push_back(pick(pick(pick(events))));
             }
-            for (int i = 0; i < 4; ++i) selected.push_back(pick(i >= 2 && !collisions.empty() ? collisions : generic));
+            if (prompt_version == beam::kPromptV2) {
+                selected.push_back(pick(generic)); selected.push_back(pick(collisions.empty() ? generic : collisions));
+                selected.push_back(pick(translations)); selected.push_back(pick(translations));
+            } else for (int i = 0; i < 4; ++i) selected.push_back(pick(i >= 2 && !collisions.empty() ? collisions : generic));
             int target_tokens = 0;
             for (int i = 0; i < 12; ++i) target_tokens += samples[selected[i]].at("target_count").get<int>();
             for (int i = 0; i < 16; ++i) {
@@ -435,7 +453,7 @@ struct Trainer {
         fs::copy_file(saved_state / "adapter.gguf", destination / "adapter.gguf", fs::copy_options::overwrite_existing);
         Json manifest{{"id", job.at("id")}, {"path", (destination / "adapter.gguf").u8string()},
             {"checkpoint", (destination / "checkpoint").u8string()}, {"base_sha256", base_hash}, {"tokenizer", "gguf-embedded"},
-            {"prompt_version", "keys_llm_v1"}, {"rank", 8}, {"alpha", 16}, {"recipe", recipe}, {"clock", job.at("clock")},
+            {"prompt_version", prompt_version}, {"rank", 8}, {"alpha", 16}, {"recipe", recipe}, {"clock", job.at("clock")},
             {"training_seconds", std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count()}};
         write_json(destination / "manifest.json", manifest); write_json(root / "result.json", manifest);
         return 0;

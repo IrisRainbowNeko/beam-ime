@@ -22,14 +22,15 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("input")
     parser.add_argument("output")
+    parser.add_argument("--prompt-version", choices=["keys_llm_v1", "keys_llm_v2"])
     args = parser.parse_args()
 
     reader = gguf.GGUFReader(args.input)
     tensors = {t.name: t for t in reader.tensors}
-    if "output.weight" not in tensors:
+    if "output.weight" not in tensors and not args.prompt_version:
         sys.exit("no output.weight: already tied")
-    out, embd = tensors["output.weight"], tensors["token_embd.weight"]
-    if out.tensor_type != embd.tensor_type or not np.array_equal(np.asarray(out.data), np.asarray(embd.data)):
+    out, embd = tensors.get("output.weight"), tensors["token_embd.weight"]
+    if out is not None and (out.tensor_type != embd.tensor_type or not np.array_equal(np.asarray(out.data), np.asarray(embd.data))):
         sys.exit("output.weight differs from token_embd.weight: the model is really untied, keep both")
 
     arch = reader.fields[gguf.Keys.General.ARCHITECTURE].contents()
@@ -38,9 +39,13 @@ def main() -> None:
         # GGUFWriter writes the architecture and the GGUF.* header fields itself.
         if field.name == gguf.Keys.General.ARCHITECTURE or field.name.startswith("GGUF."):
             continue
+        if args.prompt_version and field.name == "beam.prompt_version":
+            continue
         val_type = field.types[0]
         sub_type = field.types[-1] if val_type == gguf.GGUFValueType.ARRAY else None
         writer.add_key_value(field.name, field.contents(), val_type, sub_type=sub_type)
+    if args.prompt_version:
+        writer.add_string("beam.prompt_version", args.prompt_version)
     kept = [t for t in reader.tensors if t.name != "output.weight"]
     for t in kept:
         writer.add_tensor_info(t.name, t.data.shape, t.data.dtype, t.data.nbytes, t.tensor_type)
@@ -50,7 +55,7 @@ def main() -> None:
     for t in kept:
         writer.write_tensor_data(t.data, tensor_endianess=reader.endianess)
     writer.close()
-    print(f"dropped output.weight ({out.n_bytes >> 20} MB)")
+    print(f"dropped output.weight ({out.n_bytes >> 20} MB)" if out else "wrote prompt metadata to tied model")
 
 
 if __name__ == "__main__":

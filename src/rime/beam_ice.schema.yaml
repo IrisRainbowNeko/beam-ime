@@ -21,6 +21,7 @@ __patch:
   - engine/processors/@before 0: beam_processor
   - engine/translators/@before 0: beam_translator
   - switches/@next: { name: beam_off, states: [ 智能, 经典 ] }
+  - switches/@next: { name: beam_translate, reset: 0, states: [ 普通输入, 英文翻译 ] }
   # rime-ice's long_word_filter lifts 2 longer dictionary words to position 4, which pushed
   # Beam's 4th and 5th candidates down; lift them to just after Beam's candidates instead.
   - long_word_filter/idx: 6

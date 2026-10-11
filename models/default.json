@@ -5,6 +5,7 @@
   "filename": "beam-0.6b-q8_0.gguf",
   "baseModel": "Qwen/Qwen3-0.6B-Base",
   "promptVersion": "keys_llm_v1",
+  "modes": ["ime"],
   "quantization": "Q8_0",
   "tiedEmbeddings": true,
   "size": 639446720,

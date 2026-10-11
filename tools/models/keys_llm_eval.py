@@ -19,7 +19,7 @@ from typing import Any
 
 import torch
 
-from keys_llm_format import PROMPT_VERSION, build_prompt, parse_output, strict_valid, structural_valid
+from keys_llm_format import build_prompt, parse_output, strict_valid, structural_valid
 
 FILTERS = {
     "raw": lambda keys, parsed: parsed["result"] is not None,
@@ -37,10 +37,10 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ranked_results(keys: str, texts: list[str], name: str) -> list[str]:
+def ranked_results(keys: str, texts: list[str], name: str, mode: str = 'ime') -> list[str]:
     seen, ranked = set(), []
     for text in texts:
-        parsed = parse_output(text)
+        parsed = parse_output(text, mode)
         result = parsed["result"]
         if FILTERS[name](keys, parsed) and result not in seen:
             seen.add(result)
@@ -52,6 +52,7 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
     groups: dict[str, list[dict]] = defaultdict(list)
     for case in cases:
         groups["all"].append(case)
+        groups[case.get('mode', 'ime')].append(case)
         groups[case["variant"]].append(case)
         seen = "seen" if case.get("seenTarget") else "unseen"
         groups[f"{case['variant']}:{seen}"].append(case)
@@ -69,6 +70,10 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
             for k in TOP_K:
                 entry[f"{filter_name}P@{k}"] = sum(rank is not None and rank <= k for rank in ranks) / len(members)
         metrics[name] = entry
+        bilingual = [case for case in members if case.get('mode') == 'translate_en']
+        if bilingual:
+            entry['pairedFormatRate'] = sum(case['paired'] for case in bilingual) / len(bilingual)
+            entry['commentP@1'] = sum(case['comment'] == case['source'] for case in bilingual) / len(bilingual)
     return metrics
 
 
@@ -77,6 +82,8 @@ def evaluate(args: argparse.Namespace) -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
     rows = [json.loads(line) for line in Path(args.input).open(encoding="utf-8") if line.strip()]
+    if args.mode:
+        rows = [row for row in rows if row.get('mode', 'ime') == args.mode]
     if args.variants:
         rows = [row for row in rows if row["variant"] in args.variants]
     if args.drop_context:
@@ -99,38 +106,43 @@ def evaluate(args: argparse.Namespace) -> None:
         rows = kept
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, padding_side="left")
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
-    model = AutoModelForCausalLM.from_pretrained(args.checkpoint, dtype=torch.bfloat16, attn_implementation="sdpa")
+    model = AutoModelForCausalLM.from_pretrained(args.checkpoint, torch_dtype=torch.bfloat16, attn_implementation="sdpa")
     model.to("cuda").eval()
+    version = args.prompt_version or getattr(model.config, 'beam_prompt_version', 'keys_llm_v1')
 
     order = sorted(range(len(rows)), key=lambda index: len(rows[index]["keys"]))
     cases: list[dict | None] = [None] * len(rows)
     started = time.time()
     for start in range(0, len(order), args.batch_size):
         indices = order[start:start + args.batch_size]
-        prompts = [build_prompt(rows[i]["keys"], rows[i].get("context", "")) for i in indices]
+        prompts = [build_prompt(rows[i]["keys"], rows[i].get("context", ""), rows[i].get('mode', 'ime'), version) + '结果：' for i in indices]
         encoded = tokenizer(prompts, add_special_tokens=False, padding=True, return_tensors="pt").to("cuda")
-        longest = max(len(rows[i]["keys"]) for i in indices)
         output = model.generate(
             **encoded,
             num_beams=args.beams,
             num_return_sequences=args.beams,
             do_sample=False,
-            max_new_tokens=2 * longest + 16,
+            max_new_tokens=max(min(192, 4 * len(rows[i]['keys'].replace("'", '')) + 32) if rows[i].get('mode') == 'translate_en'
+                               else 2 * len(rows[i]['keys'].replace("'", '')) + 8 for i in indices),
             pad_token_id=pad_id,
             eos_token_id=tokenizer.eos_token_id,
         )
         generated = output[:, encoded["input_ids"].shape[1]:]
-        texts = tokenizer.batch_decode(generated, skip_special_tokens=True)
+        texts = ['结果：' + text for text in tokenizer.batch_decode(generated, skip_special_tokens=True)]
         for offset, index in enumerate(indices):
             row = rows[index]
+            mode = row.get('mode', 'ime')
+            target = row['translation'] if mode == 'translate_en' else row['target']
             beams = texts[offset * args.beams:(offset + 1) * args.beams]
             ranks, top = {}, {}
             for name in FILTERS:
-                ranked = ranked_results(row["keys"], beams, name)
+                ranked = ranked_results(row["keys"], beams, name, mode)
                 top[name] = ranked[:5]
-                ranks[name] = ranked.index(row["target"]) + 1 if row["target"] in ranked else None
+                ranks[name] = ranked.index(target) + 1 if target in ranked else None
+            parsed = parse_output(beams[0], mode)
             cases[index] = {
-                "id": row["id"], "variant": row["variant"], "keys": row["keys"], "target": row["target"],
+                "id": row["id"], "variant": row["variant"], "keys": row["keys"], "target": target, 'mode': mode,
+                'source': row['target'], 'comment': parsed.get('comment'), 'paired': structural_valid(row['keys'], parsed),
                 "hasContext": bool(row.get("context")),
                 "seenTarget": row.get("seenTarget"), "ranks": ranks, "top": top,
                 "beam0": beams[0],
@@ -140,7 +152,8 @@ def evaluate(args: argparse.Namespace) -> None:
     finished = [case for case in cases if case is not None]
     report = {
         "kind": "beam-v8-keys-llm-evaluation",
-        "promptVersion": PROMPT_VERSION,
+        "promptVersion": version,
+        "translationMetric": "reference exact match, not semantic translation quality",
         "checkpoint": args.checkpoint,
         "input": args.input,
         "inputSha256": sha256(Path(args.input)),
@@ -163,6 +176,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--input", required=True)
+    parser.add_argument('--mode', choices=('ime', 'translate_en'))
+    parser.add_argument('--prompt-version', choices=('keys_llm_v1', 'keys_llm_v2'))
     parser.add_argument("--output", required=True)
     parser.add_argument("--beams", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=64)

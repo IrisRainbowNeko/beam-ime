@@ -19,6 +19,8 @@ def main():
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--pinyin', type=Path, required=True)
     parser.add_argument('--replay', type=Path, default=ROOT / 'src/trainer/replay.json')
+    parser.add_argument('--prompt-version', choices=('keys_llm_v1', 'keys_llm_v2'),
+                        default=json.loads((ROOT / 'models/default.json').read_text())['promptVersion'])
     parser.add_argument('--platform', choices=('linux-x86_64', 'windows-x86_64'), required=True)
     parser.add_argument('--release-url', required=True)
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'dist')
@@ -40,7 +42,11 @@ def main():
         replay = json.loads(args.replay.read_text(encoding='utf-8'))
         if not isinstance(replay, list) or not 16 <= len(replay) <= 256:
             raise ValueError('replay must contain 16 to 256 rows')
-        shutil.copy2(args.replay, stage / 'replay.json')
+        if args.prompt_version == 'keys_llm_v1':
+            replay = [row for row in replay if row.get('mode', 'ime') == 'ime']
+        elif not any(row.get('mode') == 'translate_en' and row.get('translation') for row in replay):
+            raise ValueError('keys_llm_v2 replay requires translated examples')
+        (stage / 'replay.json').write_text(json.dumps(replay, ensure_ascii=False), encoding='utf-8')
         shutil.copytree(args.runtime / 'licenses', stage / 'licenses')
         shutil.copy2(ROOT / 'LICENSE', stage / 'licenses/Beam-Apache-2.0.txt')
         shutil.copy2(ROOT / 'licenses/dependencies/nlohmann-json-MIT', stage / 'licenses')
@@ -49,7 +55,7 @@ def main():
             for filename in ('GCC-runtime-exception', 'MinGW-runtime'):
                 shutil.copy2(ROOT / 'licenses/dependencies' / filename, stage / 'licenses')
         component = {'schemaVersion': 2, 'version': version, 'base_sha256': sha256(args.model),
-                     'tokenizer': 'gguf-embedded', 'prompt_version': 'keys_llm_v1',
+                     'tokenizer': 'gguf-embedded', 'prompt_version': args.prompt_version,
                      'recipe': 'beam-personal-r8-qvac-v1', 'backend': 'vulkan',
                      'executable': 'bin/' + executable, 'pinyin': 'pinyin.tsv', 'replay': 'replay.json'}
         (stage / 'component.json').write_text(json.dumps(component, indent=2), encoding='utf-8')

@@ -10,11 +10,12 @@ import time
 import unittest
 
 
-def tiny_model(path):
+def tiny_model(path, version='keys_llm_v1'):
     import gguf
     import numpy as np
     rng = np.random.default_rng(17)
     writer = gguf.GGUFWriter(str(path), 'qwen3')
+    writer.add_string('beam.prompt_version', version)
     writer.add_context_length(256)
     writer.add_embedding_length(32)
     writer.add_block_count(1)
@@ -53,17 +54,26 @@ def tiny_model(path):
 @unittest.skipUnless(os.environ.get('BEAM_TEST_NATIVE_TRAINER'), 'native trainer regression runs in standalone trainer CTest')
 class NativeTrainerTest(unittest.TestCase):
     def test_microbatch_resume_and_completed_reexport(self):
+        self.check_resume('keys_llm_v1')
+
+    def test_dual_task_replay_and_resume(self):
+        self.check_resume('keys_llm_v2')
+
+    def check_resume(self, version):
         import gguf
         import numpy as np
         executable = os.environ['BEAM_TEST_NATIVE_TRAINER']
         with tempfile.TemporaryDirectory(prefix='beam-训练 test-') as temporary:
             root = Path(temporary)
-            model = root / 'tiny.gguf'; tiny_model(model)
+            model = root / 'tiny.gguf'; tiny_model(model, version)
             fingerprint = hashlib.sha256(model.read_bytes()).hexdigest()
             pinyin = root / 'pinyin.tsv'; pinyin.write_text('星\txing\n好\thao\n', encoding='utf-8')
             replay = root / 'replay.json'
-            replay.write_text(json.dumps([{'keys': 'hao', 'target': '好', 'context': ''}] * 16), encoding='utf-8')
-            component = {'schemaVersion': 2, 'recipe': 'beam-personal-r8-qvac-v1', 'prompt_version': 'keys_llm_v1',
+            rows = [{'keys': 'hao', 'target': '好', 'context': ''}] * 16
+            if version == 'keys_llm_v2':
+                rows += [{'keys': 'hao', 'target': '好', 'translation': 'Good.', 'context': '', 'mode': 'translate_en'}] * 4
+            replay.write_text(json.dumps(rows), encoding='utf-8')
+            component = {'schemaVersion': 2, 'recipe': 'beam-personal-r8-qvac-v1', 'prompt_version': version,
                          'backend': 'cpu', 'base_sha256': fingerprint, 'pinyin': str(pinyin), 'replay': str(replay)}
             def job(directory):
                 directory.mkdir(parents=True)
@@ -79,6 +89,13 @@ class NativeTrainerTest(unittest.TestCase):
                     result = subprocess.run([executable, '--job', str(path)], stdout=output, stderr=output, timeout=180)
                     self.assertEqual(result.returncode, 0, log.read_text(encoding='utf-8')[-6000:])
                 run(baseline)
+                snapshot = json.loads((baseline.parent / 'samples.json').read_text())
+                if version == 'keys_llm_v2':
+                    for start in range(0, len(snapshot['schedule']), 16):
+                        selected = snapshot['schedule'][start:start + 16]
+                        modes = [snapshot['samples'][entry['sample']]['mode'] for entry in selected]
+                        self.assertEqual(modes, ['ime'] * 14 + ['translate_en'] * 2)
+                        self.assertTrue(all('teacher' in snapshot['samples'][entry['sample']] for entry in selected[12:]))
                 process = subprocess.Popen([executable, '--job', str(resumed)], stdout=output, stderr=output)
                 try:
                     deadline = time.monotonic() + 120
@@ -104,6 +121,7 @@ class NativeTrainerTest(unittest.TestCase):
                 run(resumed)
                 def tensors(path):
                     manifest = json.loads((path.parent / 'result.json').read_text(encoding='utf-8'))
+                    self.assertEqual(manifest['prompt_version'], version)
                     return {t.name: t.data.copy() for t in gguf.GGUFReader(manifest['path']).tensors}
                 expected, actual = tensors(baseline), tensors(resumed)
                 self.assertEqual(set(expected), set(actual))

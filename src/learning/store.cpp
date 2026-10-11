@@ -308,7 +308,7 @@ bool LearningStore::feedback(const Json & event) {
 }
 
 Json LearningStore::rank(const std::string & raw_keys, const std::string & context,
-                         const std::vector<std::string> & generated, size_t limit) const {
+                         const std::vector<std::string> & generated, size_t limit, bool insert_personal) const {
     struct Candidate { std::string text; double score; bool personal; };
     std::vector<Candidate> options;
     for (const auto & text : generated) if (std::none_of(options.begin(), options.end(), [&](auto & c) { return fold_case(c.text) == fold_case(text); }))
@@ -373,7 +373,7 @@ Json LearningStore::rank(const std::string & raw_keys, const std::string & conte
                 for (const auto & value : additions) {
                     auto found = std::find_if(options.begin(), options.end(), [&](auto & c) { return fold_case(c.text) == fold_case(value); });
                     double scaled = bonus * (double)term_chars.size() / std::max(term_chars.size(), utf8_chars(value).size());
-                    if (found == options.end()) options.push_back({value, scaled, true});
+                    if (found == options.end()) { if (insert_personal) options.push_back({value, scaled, true}); }
                     else if (!found->personal) { found->score += scaled; found->personal = true; }
                 }
             }

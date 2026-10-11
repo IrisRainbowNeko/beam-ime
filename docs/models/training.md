@@ -1,6 +1,7 @@
 # 模型工具
 
-本次发布复用既有模型；以下工具用于复现训练方法或训练自己的兼容模型。
+v0.2.1 发布模型采用 `keys_llm_v1`。双模式开发使用 `keys_llm_v2`；任务开关需要配套训练后的模型。
+以下工具用于训练模型；开发机使用的 Python/PyTorch 不进入用户安装包。
 训练数据需采用 JSONL，每行包含 `keys`、`context`、`target`；直接输出模式不需要拼音切分。
 
 ```json
@@ -11,7 +12,7 @@
 安装 PyTorch、Transformers、pypinyin、NumPy、safetensors；实际环境版本会写入训练 run-config。
 
 ```sh
-python tools/models/keys_llm_train.py --model /path/Qwen3-0.6B-Base \
+python tools/models/keys_llm_train.py --model /path/Qwen3-0.6B-Base --prompt-version keys_llm_v1 \
   --train /path/train.jsonl --dev /path/dev.jsonl --output runs/public \
   --no-segments --epochs 1 --batch-size 256 --micro-batch-size 32
 python tools/models/keys_llm_eval.py --help
@@ -28,6 +29,49 @@ PYTHONPATH=/path/llama.cpp/gguf-py python tools/models/tie_embeddings.py model-q
 去重工具只有在两份 embedding 权重逐字节相同时才会移除输出层。发布新模型时更新
 manifest、模型卡和评测结果，不修改旧版本的文件内容。
 
+## 双模式联合训练
+
+从发布 GGUF 对应的完整精度 checkpoint 继续全参数训练，tokenizer 不增加词表。
+先准备句子级 JSONL，`target` 为中文或中英混输原句，`translation` 为教师英文译文：
+
+```json
+{"target":"明天见","translation":"See you tomorrow.","session_id":"example-1","context":""}
+{"target":"不用安装CUDA","translation":"You do not need to install CUDA.","keys":"byazcuda","session_id":"example-2","context":""}
+```
+
+`source` 与 `session_id` 标识会话；同句跨会话出现时合并分组。没有译文的句子仅用于普通任务。
+原句和会话先划分 train/dev/test，再展开原始按键、全拼、简拼、混拼，英文词保持原拼写。
+上下文最多 64 字。原句限当前 IME 支持的汉字及英文词；数字时间在中文字段中使用对应中文读法。
+译文中的数字、标点与缩写不受拼音结构匹配限制。独立测试集需要覆盖否定、时间、专名、术语、口语和混输。
+
+```sh
+python tools/models/prepare_dual_task.py --input /path/paired.jsonl /path/ordinary.jsonl \
+  --output /path/dual-data
+python tools/models/keys_llm_train.py --model /path/release-checkpoint \
+  --teacher /path/release-checkpoint --train /path/dual-data/train.jsonl \
+  --dev /path/dual-data/dev.jsonl --output /path/dual-run
+```
+
+默认配方：AdamW、学习率 `1e-5`、有效 batch 256、microbatch 4、2 epoch、warmup 3%、
+序列上限 512、梯度裁剪 1.0。每个有效 batch 固定普通/译英 192:64，较小任务池循环采样。
+各任务独立按目标 token 归一化，再以 0.75/0.25 加权；普通任务额外加 0.25 倍旧模型教师 KL。
+教师使用其原有 prompt，学生使用新 prompt，两者只对齐相同的正文目标 token。
+可用 `--gpu-memory-fraction` 限制共享 GPU 显存；`--device cpu` 用于小模型开发测试。
+
+```sh
+python tools/models/keys_llm_eval.py --checkpoint /path/dual-run/epoch-2 \
+  --input /path/dual-data/test.jsonl --output /path/dual-eval.json --batch-size 4
+python /path/llama.cpp/convert_hf_to_gguf.py /path/dual-run/epoch-2 \
+  --outfile /path/dual-q8.gguf --outtype q8_0
+PYTHONPATH=/path/llama.cpp/gguf-py python tools/models/tie_embeddings.py \
+  /path/dual-q8.gguf /path/beam-dual-q8.gguf --prompt-version keys_llm_v2
+```
+
+评测按任务分别输出结果，译英记录正文、中文注释、双字段结构有效率及参考译文精确匹配。
+英文精确匹配不能代替语义评价，至少 500 条独立样例还需检查否定、遗漏和两字段一致性。
+中文 P@1/P@5 与旧模型同集比较，目标下降不超过 0.5 个百分点；延迟需使用量化后模型分别测 CPU/Vulkan。
+新 manifest 使用 `promptVersion: keys_llm_v2`、`modes: [ime, translate_en]` 及实际 GGUF 大小和 SHA-256。
+
 ## 个人 LoRA 训练组件
 
 普通安装包内的 C++ 词库可以独立使用。发行版参数学习由 `src/trainer` 的 QVAC 原生进程执行，
@@ -39,6 +83,9 @@ AdamW 学习率为 2e-4，梯度裁剪 1.0，每轮 24 步，每步通过 microb
 损失为个人 CE + 0.25 倍保底 CE + 基座教师 KL；教师采用 top32 加剩余概率缓存。
 近期/长期池按上屏事件采样，避免整句及片段重复放大，按原始按键对齐后增加去重的全拼和简拼变体。
 保底样本混合通用数据与独立参考上下文中的同码普通用法。
+双模式基座的四条保底固定为 1 条普通中文、1 条同码中文、2 条译英；译英两字段均受 CE 和基座教师 KL 约束。
+当任务快照没有可生成的同码普通样本时，该位置仍使用通用中文保底。
+个人采集只接收普通输入，旧基座适配器和优化器不会加载到新基座，词库及历史上屏记录继续保留。
 
 训练时输入会请求暂停；在 microbatch 边界保存适配器、累积梯度、优化器和随机数状态后退出。
 再次空闲时读取固定任务快照续跑。导出独立 GGUF adapter，完成组词后加载，无需重写基座。
@@ -81,6 +128,9 @@ python tools/package_learning.py \
   --pinyin build/release/data/pinyin.tsv --platform linux-x86_64 \
   --release-url "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v$(cat VERSION)"
 ```
+
+`--prompt-version keys_llm_v2` 用于双模式模型；省略时采用 `models/default.json` 的 prompt 版本。
+内置保底池包含人工双语样本，v1 打包自动排除译英样本。训练器要求组件声明与实际 GGUF 元数据一致。
 
 输出 `beam-learning-<版本>-<平台>-vulkan.json` 和一份 ZIP。
 Windows 使用 `--runtime build/learning-win-runtime --platform windows-x86_64`。

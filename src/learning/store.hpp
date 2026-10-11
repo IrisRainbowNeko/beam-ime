@@ -38,7 +38,7 @@ class LearningStore {
     void changed();
     bool feedback(const Json & event);
     Json rank(const std::string & keys, const std::string & context,
-              const std::vector<std::string> & generated, size_t limit) const;
+              const std::vector<std::string> & generated, size_t limit, bool insert_personal = true) const;
     Json snapshot() const;
     void reset();
     const std::filesystem::path & directory() const { return directory_; }

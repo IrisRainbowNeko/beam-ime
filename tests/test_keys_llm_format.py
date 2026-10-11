@@ -14,10 +14,24 @@ from keys_llm_format import (
 class KeysLlmFormatTest(unittest.TestCase):
     def test_keys_are_spaced_and_separators_collapse(self):
         self.assertEqual(normalize_keys(" N c  sh "), "n'c'sh")
-        self.assertEqual(build_prompt("n c sh"), "按键：n ' c ' s h\n")
-        self.assertEqual(build_prompt("wy", "你好"), "上文：你好\n按键：w y\n")
+        self.assertEqual(build_prompt("n c sh"), "任务：输入\n按键：n ' c ' s h\n")
+        self.assertEqual(build_prompt("wy", "你好"), "任务：输入\n上文：你好\n按键：w y\n")
+        self.assertEqual(build_prompt("wy", "你好", version="keys_llm_v1"), "上文：你好\n按键：w y\n")
         with self.assertRaises(ValueError):
             normalize_keys("wo2")
+
+    def test_translation_contract(self):
+        self.assertEqual(build_prompt("mtj", mode="translate_en"), "任务：译英\n按键：m t j\n")
+        parsed = parse_output(build_target("明天见", mode="translate_en", translation="See you tomorrow."), "translate_en")
+        self.assertEqual(parsed["result"], "See you tomorrow.")
+        self.assertEqual(parsed["comment"], "明天见")
+        self.assertTrue(structural_valid("mtj", parsed))
+        self.assertTrue(structural_valid('sdb', parse_output('结果：3:30\t三点半', 'translate_en')))
+        self.assertFalse(structural_valid("m", parsed))
+        for output in ("结果：Hello", "结果：\t你好", "结果：Hi\t你好\textra", "结果：Hi\t你好\n"):
+            self.assertIsNone(parse_output(output, "translate_en")["result"])
+        with self.assertRaises(ValueError):
+            build_prompt("nh", mode="translate_en", version="keys_llm_v1")
 
     def test_pyseg_round_trips_through_target_and_parser(self):
         segments = split_pyseg("ZhebMBiY")

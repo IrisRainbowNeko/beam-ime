@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Add the `keys_llm_v2` conditional IME/English contract and paired candidate comments.
+- Add a Rime translation switch, task-isolated caches and English-only commits; preserve keys on translation failures.
+- Add paired-data preparation, 3:1 full-parameter training, ordinary-task teacher KL and task-specific evaluation.
+- Add bilingual replay to native QVAC learning; translation commits are excluded from Chinese learning samples.
+- The unified release model and platform installers are still pending; current downloads remain v0.2.1.
+
 ## 0.2.1 - 2026-10-08
 
 - Download, install and enable the native learning component directly from the Rime menu.

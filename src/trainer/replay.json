@@ -46,5 +46,21 @@
   {"keys":"chongxin qidong","target":"重新启动","context":""},
   {"keys":"shurufabucuo","target":"输入法不错","context":""},
   {"keys":"yijingshoudaole","target":"已经收到了","context":""},
-  {"keys":"xiazhouzaishuoba","target":"下周再说吧","context":""}
+  {"keys":"xiazhouzaishuoba","target":"下周再说吧","context":""},
+  {"mode":"translate_en","keys":"mingtianjian","target":"明天见","translation":"See you tomorrow.","context":""},
+  {"mode":"translate_en","keys":"wbty","target":"我不同意","translation":"I disagree.","context":""},
+  {"mode":"translate_en","keys":"bushi suoyouren douzhidao","target":"不是所有人都知道","translation":"Not everyone knows.","context":""},
+  {"mode":"translate_en","keys":"buwanquan zhengque","target":"不完全正确","translation":"Not entirely correct.","context":""},
+  {"mode":"translate_en","keys":"mingtianzaoshangjiudian","target":"明天早上九点","translation":"Tomorrow at 9 a.m.","context":""},
+  {"mode":"translate_en","keys":"woyuanyideng","target":"我愿意等","translation":"I'm willing to wait.","context":""},
+  {"mode":"translate_en","keys":"zhegeAPIzhichicuowuchongshi","target":"这个API支持错误重试","translation":"This API supports retries on errors.","context":""},
+  {"mode":"translate_en","keys":"shiyongVulkanxunlian","target":"使用Vulkan训练","translation":"Train using Vulkan.","context":""},
+  {"mode":"translate_en","keys":"bsby","target":"不是不要","translation":"It's not that I don't want it.","context":""},
+  {"mode":"translate_en","keys":"qingbaocunwenjian","target":"请保存文件","translation":"Please save the file.","context":"Please finish editing the document."},
+  {"mode":"translate_en","keys":"woyijingshoudaole","target":"我已经收到了","translation":"I've already received it.","context":"刚才发给你的文件能看到吗"},
+  {"mode":"translate_en","keys":"goodmorning","target":"Good morning","translation":"Good morning.","context":""},
+  {"mode":"translate_en","keys":"buxuyaoan zhuangCUDA","target":"不需要安装CUDA","translation":"You don't need to install CUDA.","context":""},
+  {"mode":"translate_en","keys":"meiyourentongyi","target":"没有人同意","translation":"Nobody agrees.","context":""},
+  {"mode":"translate_en","keys":"xiawu sandian ban","target":"下午三点半","translation":"3:30 p.m.","context":"会议几点开始"},
+  {"mode":"translate_en","keys":"keyimafan niyixia ma","target":"可以麻烦你一下吗","translation":"Could you help me for a moment?","context":""}
 ]

@@ -77,6 +77,7 @@ struct TypedText {
     std::string session, composition, previous_input, before_context;
     uint64_t sequence = 0, generation = 0, reported_errors = 0;
     bool learning = false, paused = false, use_context = true, syncing = false;
+    bool translating = false;
     std::map<size_t, std::string> first;
     ::rime::connection update_connection, commit_connection, option_connection;
 
@@ -97,7 +98,7 @@ struct TypedText {
         });
         commit_connection = engine->context()->commit_notifier().connect([this](::rime::Context * ctx) {
             if (composition.empty()) return;
-            if (learning && !paused) {
+            if (learning && !paused && !translating && !ctx->get_option("beam_translate")) {
                 nlohmann::json parts = nlohmann::json::array();
                 std::string first_text;
                 for (const auto & segment : ctx->composition()) {
@@ -115,9 +116,21 @@ struct TypedText {
             }
             notify("end"); composition.clear(); first.clear(); ++generation;
         });
-        option_connection = engine->context()->option_update_notifier().connect([this](::rime::Context * ctx, const std::string & name) {
+        option_connection = engine->context()->option_update_notifier().connect(0, [this](::rime::Context * ctx, const std::string & name) {
             if (syncing) return;
-            if (name == "beam_learning_install" && ctx->get_option(name)) {
+            if (name == "beam_translate" || (name == "beam_off" && ctx->get_option(name) && ctx->get_option("beam_translate"))) {
+                auto raw = ctx->input();
+                if (!composition.empty()) notify("cancel");
+                composition.clear(); first.clear(); ++generation;
+                syncing = true;
+                if (name == "beam_off" && ctx->get_option("beam_translate")) ctx->set_option("beam_translate", false);
+                else if (name == "beam_translate" && ctx->get_option("beam_translate") && ctx->get_option("beam_off")) ctx->set_option("beam_off", false);
+                translating = ctx->get_option("beam_translate");
+                // Discard uncommitted segment selections, retaining the user's original keys.
+                ctx->Clear();
+                if (!raw.empty()) ctx->set_input(raw);
+                syncing = false;
+            } else if (name == "beam_learning_install" && ctx->get_option(name)) {
                 client->post({{"op", "learning"}, {"action", "setup"}, {"confirm", true}});
             } else if (name == "beam_learning") {
                 learning = ctx->get_option(name); paused = false;
@@ -167,6 +180,7 @@ struct TypedText {
     void begin(::rime::Context * ctx) {
         if (!composition.empty()) return;
         composition = std::to_string(++sequence); first.clear(); previous_input = ctx->input();
+        translating = ctx->get_option("beam_translate");
         before_context = use_context ? context(history_text(ctx->commit_history())) : "";
         notify("begin");
     }
@@ -174,7 +188,7 @@ struct TypedText {
     void notify(const char * state) {
         auto errors = client->errors();
         client->post({{"op", "composition"}, {"session", session}, {"composition", composition},
-                      {"state", state}, {"client_errors", errors - reported_errors}});
+                      {"state", state}, {"mode", translating ? "translate_en" : "ime"}, {"client_errors", errors - reported_errors}});
         reported_errors = errors;
     }
 
@@ -221,6 +235,9 @@ class BeamProcessor final : public ::rime::Processor {
         ::rime::Context * ctx = engine_->context();
         if (!ctx) return ::rime::kNoop;
         typed_->sync(engine_);
+        if (!key.release() && key.modifier() == 0 && ctx->get_option("beam_translate") && ctx->IsComposing() &&
+            (key.keycode() == XK_space || key.keycode() == XK_Return || key.keycode() == XK_KP_Enter) &&
+            !ctx->GetSelectedCandidate()) return ::rime::kAccepted;
         if (key.release() || key.modifier() != 0 || ctx->IsComposing()) return ::rime::kNoop;
         if (key.keycode() == XK_Return || key.keycode() == XK_KP_Enter) {
             if (typed_->touch()) ctx->commit_history().clear();
@@ -251,6 +268,7 @@ class BeamTranslator final : public ::rime::Translator {
         if (input.empty() || !segment.HasTag("abc") || !engine_) return nullptr;
         ::rime::Context * ctx = engine_->context();
         if (!ctx || ctx->get_option("beam_off")) return nullptr;
+        const std::string mode = ctx->get_option("beam_translate") ? "translate_en" : "ime";
         std::string keys = normalize_keys(input);
         int letters = letter_count(keys);
         if (letters == 0 || letters > max_letters_) return nullptr;
@@ -270,16 +288,41 @@ class BeamTranslator final : public ::rime::Translator {
         }
 
         std::vector<std::string> candidates;
-        if (keys == last_keys_ && context == last_context_ && last_generation_ == typed_->generation) {
+        if (keys == last_keys_ && context == last_context_ && mode == last_mode_ && last_generation_ == typed_->generation) {
             candidates = last_candidates_;
         } else {
             auto reply = typed_->client->query({{"op", "query"}, {"keys", keys}, {"context", context},
-                                                {"max", max_candidates_}, {"beam_ms", beam_ms_}}, timeout_ms_);
-            if (!reply || !reply->value("ok", false) || !reply->contains("candidates") || !(*reply)["candidates"].is_array()) return nullptr;
+                                                {"mode", mode}, {"max", max_candidates_}, {"beam_ms", beam_ms_}}, timeout_ms_);
+            if (!reply || !reply->value("ok", false) || !reply->contains("candidates") || !(*reply)["candidates"].is_array()) {
+                if (mode == "translate_en") {
+                    auto error = reply ? reply->value("error", "invalid_response") : "timeout";
+                    ctx->set_property("beam_translation_status", error);
+                    ctx->composition().back().prompt = error == "unsupported_mode" ? "请更新双模式模型" : "翻译未完成，可切回普通输入";
+                }
+                return nullptr;
+            }
+            auto strings = [](const nlohmann::json & values) {
+                return values.is_array() && std::all_of(values.begin(), values.end(), [](const auto & value) { return value.is_string(); });
+            };
+            if ((reply->contains("mode") && !(*reply)["mode"].is_string()) || !strings((*reply)["candidates"]) ||
+                (reply->contains("comments") && !strings((*reply)["comments"])) ||
+                (reply->contains("sources") && !strings((*reply)["sources"]))) {
+                ctx->set_property("beam_translation_status", "invalid_response");
+                return nullptr;
+            }
+            if (reply->value("mode", "ime") != mode) return nullptr;
             for (auto & candidate : (*reply)["candidates"]) if (candidate.is_string()) candidates.push_back(candidate);
+            comments_ = reply->value("comments", std::vector<std::string>{});
+            if (mode == "translate_en" && comments_.size() != candidates.size()) return nullptr;
             sources_ = reply->value("sources", std::vector<std::string>{});
+            if (mode == "translate_en") {
+                const std::string state = candidates.empty() ? "no_candidate" : "ready";
+                if (ctx->get_property("beam_translation_status") != state) ctx->set_property("beam_translation_status", state);
+                if (candidates.empty()) ctx->composition().back().prompt = "暂无译英候选，可补充拼音或切回普通输入";
+            }
             typed_->sync(engine_);
             last_keys_ = keys;
+            last_mode_ = mode;
             last_context_ = context;
             last_candidates_ = candidates;
             last_generation_ = typed_->generation;
@@ -291,7 +334,9 @@ class BeamTranslator final : public ::rime::Translator {
         for (size_t i = 0; i < candidates.size(); ++i) {
             const auto & text = candidates[i];
             std::string type = i < sources_.size() && sources_[i] == "personal" ? "beam_personal" : "beam";
-            auto cand = ::rime::New<::rime::SimpleCandidate>(type, segment.start, segment.end, text, "", input);
+            if (mode == "translate_en") type = "beam_translate";
+            auto cand = ::rime::New<::rime::SimpleCandidate>(type, segment.start, segment.end, text,
+                                                          i < comments_.size() ? comments_[i] : "", input);
             cand->set_quality(quality);
             quality -= 1.0;
             translation->Append(cand);
@@ -324,17 +369,18 @@ class BeamTranslator final : public ::rime::Translator {
     int max_letters_ = 40;
     bool use_context_ = true;
     uint64_t last_generation_ = uint64_t(-1);
-    std::string last_keys_, last_context_;
-    std::vector<std::string> last_candidates_, sources_;
+    std::string last_keys_, last_context_, last_mode_;
+    std::vector<std::string> last_candidates_, sources_, comments_;
 };
 
 class PersonalTranslation final : public ::rime::Translation {
  public:
-    PersonalTranslation(::rime::an<::rime::Translation> source, std::shared_ptr<TypedText> typed, int size)
-        : source_(source) {
+    PersonalTranslation(::rime::an<::rime::Translation> source, std::shared_ptr<TypedText> typed, int size, bool translating)
+        : source_(source), translating_(translating) {
         std::set<std::string> personal_ids, ordinary_ids;
         for (int i = 0; i < 32 && !source_->exhausted(); ++i) {
             auto candidate = source_->Peek(); source_->Next();
+            if (translating_ && type(candidate) != "beam_translate") continue;
             if (candidate) {
                 auto id = identity(candidate);
                 if (personal(candidate)) personal_ids.insert(id);
@@ -345,18 +391,19 @@ class PersonalTranslation final : public ::rime::Translation {
                     if (duplicate != front_.end()) *duplicate = candidate;
                 }
             }
-            if ((int)front_.size() >= size && (!typed->learning || ordinary(candidate))) break;
+            if (!translating_ && (int)front_.size() >= size && (!typed->learning || ordinary(candidate))) break;
         }
-        if (typed->learning && size >= 2) {
+        if (!translating_ && typed->learning && size >= 2) {
             reserve(size - 1, [&](const auto & candidate) { return personal_ids.count(identity(candidate)); });
             reserve(size, [&](const auto & candidate) { return ordinary_ids.count(identity(candidate)); });
         }
         if (!front_.empty()) typed->first[front_[0]->start()] = front_[0]->text();
-        set_exhausted(front_.empty() && source_->exhausted());
+        set_exhausted(front_.empty() && (translating_ || source_->exhausted()));
     }
     bool Next() override {
         if (position_ < front_.size()) ++position_;
-        else if (!source_->exhausted()) source_->Next();
+        else if (!translating_ && !source_->exhausted()) source_->Next();
+        if (translating_) { set_exhausted(position_ >= front_.size()); return !exhausted(); }
         if (position_ >= front_.size()) {
             while (!source_->exhausted()) {
                 auto candidate = source_->Peek();
@@ -368,11 +415,12 @@ class PersonalTranslation final : public ::rime::Translation {
         return !exhausted();
     }
     ::rime::an<::rime::Candidate> Peek() override {
-        return position_ < front_.size() ? front_[position_] : source_->Peek();
+        return position_ < front_.size() ? front_[position_] : translating_ ? nullptr : source_->Peek();
     }
  private:
     static std::string identity(const ::rime::an<::rime::Candidate> & candidate) {
-        return std::to_string(candidate->start()) + ":" + std::to_string(candidate->end()) + ":" + fold_case(candidate->text());
+        return std::to_string(candidate->start()) + ":" + std::to_string(candidate->end()) + ":" +
+            (type(candidate) == "beam_translate" ? candidate->text() : fold_case(candidate->text()));
     }
     static std::string type(const ::rime::an<::rime::Candidate> & candidate) {
         if (!candidate) return "";
@@ -390,6 +438,7 @@ class PersonalTranslation final : public ::rime::Translation {
     ::rime::CandidateList front_;
     std::set<std::string> seen_;
     size_t position_ = 0;
+    bool translating_ = false;
 };
 
 class BeamFilter final : public ::rime::Filter {
@@ -399,7 +448,7 @@ class BeamFilter final : public ::rime::Filter {
         page_size_ = std::clamp(page_size_, 1, 10);
     }
     ::rime::an<::rime::Translation> Apply(::rime::an<::rime::Translation> translation, ::rime::CandidateList *) override {
-        return ::rime::New<PersonalTranslation>(translation, typed_, page_size_);
+        return ::rime::New<PersonalTranslation>(translation, typed_, page_size_, engine_->context()->get_option("beam_translate"));
     }
  private:
     std::shared_ptr<TypedText> typed_;

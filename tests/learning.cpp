@@ -22,6 +22,11 @@ int main(int argc, char ** argv) {
         require(!store.status()["trainer"].contains("checkpoint"), "diagnostics do not expose local paths");
         auto ranked = store.rank("xlyq", "新的开发组件", {"心理预期"}, 5);
         require(std::find(ranked["candidates"].begin(), ranked["candidates"].end(), "星澜引擎") != ranked["candidates"].end(), "initial recall");
+        auto bilingual = store.rank("xlyq", "新的开发组件", {"心理预期"}, 5, false);
+        require(bilingual["candidates"] == beam::Json::array({"心理预期"}), "translation never inserts untranslated terms");
+        bilingual = store.rank("xlyq", "新的开发组件", {"心理预期", "星澜引擎"}, 5, false);
+        auto found = std::find(bilingual["candidates"].begin(), bilingual["candidates"].end(), "星澜引擎");
+        require(found != bilingual["candidates"].end() && bilingual["sources"][found - bilingual["candidates"].begin()] == "personal", "translation can reward existing comments");
         ranked = store.rank("xinglyinq", "新的开发组件", {}, 5);
         require(ranked["candidates"][0] == "星澜引擎", "mixed recall");
         ranked = store.rank("jianchaxinglanyinqingderizhi", "", {"检查星蓝引擎的日志"}, 5);

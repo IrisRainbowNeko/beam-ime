@@ -42,6 +42,8 @@ inline std::string validate_request(const nlohmann::json & r, const std::string 
         return {};
     }
     if (r["op"] != "query") return "unknown_op";
+    if (r.contains("mode") && (!r["mode"].is_string() || (r["mode"] != "ime" && r["mode"] != "translate_en")))
+        return "invalid_mode";
     if (!r.contains("keys") || !r["keys"].is_string()) return "bad_request";
     auto keys = r["keys"].get<std::string>();
     if (keys.size() > 128 || keys.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ' ") != std::string::npos)
