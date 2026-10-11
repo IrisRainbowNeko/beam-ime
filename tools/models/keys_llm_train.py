@@ -91,6 +91,15 @@ def task_batches(examples: list[dict], batch_size: int, rng: random.Random) -> l
     return result
 
 
+def validation_examples(examples: list[dict], seed: int) -> list[dict]:
+    rng = random.Random(seed)
+    selected = []
+    for mode in MODES:
+        pool = [row for row in examples if row['mode'] == mode]
+        selected.extend(rng.sample(pool, min(2000, len(pool))))
+    return selected
+
+
 def target_logits(model, batch):
     logits = model(input_ids=batch['input_ids'], attention_mask=batch['attention_mask']).logits[:, :-1]
     labels = batch['labels'][:, 1:]
@@ -189,7 +198,8 @@ def train(args: argparse.Namespace) -> None:
         kept, dropped = prepare(Path(path), args.limit)
         train_examples.extend(kept)
         train_dropped += dropped
-    dev_examples, _ = prepare(Path(args.dev), 4000)
+    dev_examples, _ = prepare(Path(args.dev), None)
+    dev_examples = validation_examples(dev_examples, args.seed + 1)
 
     model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.float32, attn_implementation="sdpa")
     model.to(device)
@@ -224,6 +234,7 @@ def train(args: argparse.Namespace) -> None:
         "trainExamples": len(train_examples),
         "trainDroppedOverLength": train_dropped,
         "devExamples": len(dev_examples),
+        "devByTask": {mode: sum(row['mode'] == mode for row in dev_examples) for mode in MODES},
         "epochs": args.epochs,
         "batchSize": args.batch_size,
         "microBatchSize": args.micro_batch_size,

@@ -58,6 +58,32 @@ python tools/models/keys_llm_train.py --model /path/release-checkpoint \
 教师使用其原有 prompt，学生使用新 prompt，两者只对齐相同的正文目标 token。
 可用 `--gpu-memory-fraction` 限制共享 GPU 显存；`--device cpu` 用于小模型开发测试。
 
+### 正式训练流水线
+
+`translation_corpus.py` 从 LCCC 原始会话和 GeneInput 抽样，保留会话分组，并补充人工编写的否定、
+时间、专名和术语样本。默认抽取 40,000 条 LCCC、20,000 条 GeneInput，其中 20,000 条交给教师翻译，
+其余作为普通回放；翻译结构无效的样本只参与普通任务，具体失败原因保存在对应记录中。
+开发服务器使用 `Qwen/Qwen3-32B`，固定 revision
+`9216db5781bf21249d130ec9da846c4624c16137`，BF16、非思考模式、确定性生成。
+教师仅用于离线数据准备。
+
+```sh
+python tools/models/translation_corpus.py sample \
+  --lccc /path/lccc_base_train.jsonl.gz --geneinput /path/geneinput/train.jsonl \
+  --output /path/dual-corpus
+CUDA_VISIBLE_DEVICES=0 python -u tools/models/run_dual_training.py \
+  --corpus /path/dual-corpus --teacher /path/Qwen3-32B-teacher \
+  --teacher-id Qwen/Qwen3-32B \
+  --teacher-revision 9216db5781bf21249d130ec9da846c4624c16137 \
+  --model /path/release-checkpoint --output /path/new-dual-experiment
+```
+
+流水线依次生成译文、划分并展开数据、联合训练、评测新模型和旧模型同集中文结果。
+默认教师 batch 16、学生 microbatch 32、GPU 显存比例上限 0.7，其余使用上述首轮配方。
+验证集按两种任务各取最多 2,000 条，避免输入文件排序使某种任务漏评。
+输出目录必须为新目录；`status.json` 记录当前阶段，每阶段单独写日志，子进程失败即停止并记录退出码。
+长任务可放入 tmux 会话运行。模型权重、教师、语料与实验输出保存在仓库外。
+
 ```sh
 python tools/models/keys_llm_eval.py --checkpoint /path/dual-run/epoch-2 \
   --input /path/dual-data/test.jsonl --output /path/dual-eval.json --batch-size 4

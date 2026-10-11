@@ -32,6 +32,14 @@ class DualDataTest(unittest.TestCase):
 
 @unittest.skipUnless(importlib.util.find_spec('torch'), 'offline training tests require torch')
 class DualLossTest(unittest.TestCase):
+    def test_validation_sampling_keeps_both_tasks_even_when_grouped(self):
+        from keys_llm_train import validation_examples
+        rows = [{'mode': 'ime', 'id': i} for i in range(4001)] + [{'mode': 'translate_en', 'id': 5000}]
+        selected = validation_examples(rows, 17)
+        self.assertEqual(sum(r['mode'] == 'ime' for r in selected), 2000)
+        self.assertEqual(sum(r['mode'] == 'translate_en' for r in selected), 1)
+        self.assertEqual(selected, validation_examples(rows, 17))
+
     @unittest.skipUnless(importlib.util.find_spec('transformers'), 'tiny full-parameter training requires transformers')
     def test_tiny_joint_training_exports_both_tasks(self):
         import json

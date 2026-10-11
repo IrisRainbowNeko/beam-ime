@@ -97,11 +97,12 @@ def evaluate(args: argparse.Namespace) -> None:
         for row in rows:
             row["seenTarget"] = row["target"] in seen
     if args.limit_per_variant:
-        counts: dict[str, int] = defaultdict(int)
+        counts: dict[tuple[str, str], int] = defaultdict(int)
         kept = []
         for row in rows:
-            if counts[row["variant"]] < args.limit_per_variant:
-                counts[row["variant"]] += 1
+            group = (row.get('mode', 'ime'), row['variant'])
+            if counts[group] < args.limit_per_variant:
+                counts[group] += 1
                 kept.append(row)
         rows = kept
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, padding_side="left")
