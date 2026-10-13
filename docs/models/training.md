@@ -106,7 +106,8 @@ CUDA_VISIBLE_DEVICES=0 python -u tools/models/run_dual_ablation.py \
   --comet-model Unbabel/wmt22-comet-da --comet-revision 2760a223ac957f30acfb18c8aa649b01cf1d75f2
 ```
 
-COMET 在独立的开发环境安装 `unbabel-comet==2.2.7`，使用 CPU 评分。
+COMET 使用独立开发环境，安装 CPU 版 `torch==2.7.1`、`unbabel-comet==2.2.7`、
+`transformers==4.51.3` 和 `pytorch-lightning==2.6.6`；评分报告记录实际依赖版本和模型 SHA-256。
 先完成三组训练和全部 GPU 生成，再评分；各组与旧模型同集结果写入 `comparison.json`。
 默认 microbatch 8、显存比例上限 0.25，可按训练卡资源显式调整；三组使用相同配置。
 
