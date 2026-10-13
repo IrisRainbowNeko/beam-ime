@@ -10,6 +10,7 @@ from unittest.mock import patch
 from keys_llm_format import units
 from translation_corpus import compact, focused_rows, lccc_rows, messages, reservoir
 from run_dual_training import main as run_pipeline
+from run_dual_ablation import commands as ablation_commands
 
 
 class TranslationCorpusTest(unittest.TestCase):
@@ -45,6 +46,27 @@ class TranslationCorpusTest(unittest.TestCase):
 
 
 class TrainingPipelineTest(unittest.TestCase):
+    def test_ablation_controls_teacher_data_budget_and_loss(self):
+        args = SimpleNamespace(ime='/ime', base='/base', reference='/reference', data=Path('/data'),
+            output=Path('/output'), micro_batch_size=8, gpu_memory_fraction=.25,
+            scorer_python='/scorer/python', comet_checkpoint='/comet/model.ckpt',
+            comet_model='test-comet', comet_revision='test-revision')
+        phases = list(ablation_commands(args))
+        training = phases[:3]
+        self.assertEqual([name for name, command in training], ['A-train', 'B-train', 'C-train'])
+        for (name, command), model, version in zip(training, ('/ime', '/ime', '/base'),
+                ('keys_llm_v2', 'keys_llm_v3', 'keys_llm_v3')):
+            values = dict(zip(command[3::2], command[4::2]))
+            self.assertEqual(values['--model'], model)
+            self.assertEqual(values['--prompt-version'], version)
+            self.assertEqual(values['--teacher'], '/ime')
+            self.assertEqual(values['--train'], '/data/train.jsonl')
+            self.assertEqual(values['--loss-scheme'], 'field')
+            self.assertEqual((values['--epochs'], values['--batch-size'], values['--seed']), ('2', '256', '20260930'))
+        evaluations = [name for name, command in phases if name.endswith('-evaluate')]
+        self.assertEqual(len(evaluations), 8)
+        self.assertEqual(sum(name.endswith('-semantic') for name, command in phases), 7)
+
     def run_case(self, output, results):
         args = ['run_dual_training.py', '--corpus', '/corpus', '--teacher', '/teacher',
                 '--teacher-id', 'test-teacher', '--teacher-revision', 'test-revision',

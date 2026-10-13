@@ -14,6 +14,8 @@ from functools import lru_cache
 from typing import Any
 
 PROMPT_VERSION = "keys_llm_v2"
+CHINESE_FIRST_VERSION = "keys_llm_v3"
+DUAL_PROMPT_VERSIONS = (PROMPT_VERSION, CHINESE_FIRST_VERSION)
 MODES = ("ime", "translate_en")
 KEY_PATTERN = re.compile(r"[a-z' ]+")
 HAN_PATTERN = re.compile(r"[一-鿿]+")
@@ -43,18 +45,20 @@ def spaced_keys(keys: str) -> str:
 def build_prompt(keys: str, context: str = "", mode: str = "ime", version: str = PROMPT_VERSION) -> str:
     if mode not in MODES:
         raise ValueError("invalid_mode")
-    if version not in ("keys_llm_v1", PROMPT_VERSION) or (version == "keys_llm_v1" and mode != "ime"):
+    if version not in ("keys_llm_v1", *DUAL_PROMPT_VERSIONS) or (version == "keys_llm_v1" and mode != "ime"):
         raise ValueError("unsupported_mode")
-    prefix = ("任务：输入\n" if mode == "ime" else "任务：译英\n") if version == PROMPT_VERSION else ""
+    prefix = ("任务：输入\n" if mode == "ime" else "任务：译英\n") if version in DUAL_PROMPT_VERSIONS else ""
     prefix += f"上文：{context[-64:]}\n" if context else ""
     return f"{prefix}按键：{spaced_keys(keys)}\n"
 
 
-def build_target(target: str, segments: list[str] | None = None, mode: str = "ime", translation: str = "") -> str:
+def build_target(target: str, segments: list[str] | None = None, mode: str = "ime", translation: str = "",
+                 version: str = PROMPT_VERSION) -> str:
     if mode == "translate_en":
         if segments is not None or not target or not translation.strip() or any(c in translation + target for c in "\t\r\n"):
             raise ValueError("translation requires two nonempty single-line fields")
-        return f"{RESULT_PREFIX}{translation}\t{target}"
+        fields = (target, translation) if version == CHINESE_FIRST_VERSION else (translation, target)
+        return RESULT_PREFIX + '\t'.join(fields)
     if mode != "ime":
         raise ValueError("invalid_mode")
     if segments is None:
@@ -69,7 +73,7 @@ def split_pyseg(pyseg: str) -> list[str]:
     return [value.lower() for value in re.findall(r"[A-Z][a-z]*", pyseg)]
 
 
-def parse_output(text: str, mode: str = "ime") -> dict[str, Any]:
+def parse_output(text: str, mode: str = "ime", version: str = PROMPT_VERSION) -> dict[str, Any]:
     """Parse one generated continuation of ``build_prompt``."""
     if mode == "translate_en":
         invalid = {"segments": None, "result": None, "comment": None}
@@ -78,7 +82,8 @@ def parse_output(text: str, mode: str = "ime") -> dict[str, Any]:
         body = text[len(RESULT_PREFIX):]
         if body.count("\t") != 1 or any(c in body for c in "\r\n"):
             return invalid
-        english, chinese = body.split("\t")
+        first, second = body.split("\t")
+        chinese, english = (first, second) if version == CHINESE_FIRST_VERSION else (second, first)
         if not chinese or not re.search(r"[A-Za-z0-9]", english) or any(ord(c) < 32 or ord(c) == 127 for c in english):
             return invalid
         return {"segments": None, "result": english, "comment": chinese}

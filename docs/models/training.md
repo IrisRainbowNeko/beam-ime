@@ -84,6 +84,32 @@ CUDA_VISIBLE_DEVICES=0 python -u tools/models/run_dual_training.py \
 输出目录必须为新目录；`status.json` 记录当前阶段，每阶段单独写日志，子进程失败即停止并记录退出码。
 长任务可放入 tmux 会话运行。模型权重、教师、语料与实验输出保存在仓库外。
 
+### 生成顺序与初始化对照
+
+`run_dual_ablation.py` 复用上述固定 train/dev/test 数据，依次训练 A/B/C 三组：
+A 从旧 IME 开始，英文在前；B 从旧 IME 开始，中文在前；C 从原始 0.6B 开始，中文在前。
+三组均使用旧 IME 作为普通输入教师，沿用 3:1 抽样、batch 256、学习率 `1e-5`、2 epoch 和相同随机种子。
+`--loss-scheme field` 将普通输入、英文正文、中文注释分别按 token 归一化，CE 权重为 0.6/0.3/0.1；
+普通输入另外加 0.25 倍教师 KL。分隔符和 EOS 均归入注释部分，避免改变顺序时改变 EOS 的权重。
+验证损失单独记录英文与注释，两个 epoch 均做生成评测。
+
+中文先行实验标记为 `keys_llm_v3`，输入 prompt 与 v2 相同，输出为 `中文注释<TAB>英文`。
+这是模型实验格式；运行时和 QVAC 接入随胜出配方另行更新。
+评测统一解析为英文正文和中文注释，分别记录中文命中、双字段结构、英文夹中文情况，以及 COMET/chrF++。
+COMET 的分数不表示正确率；`correct_comment` 是中文注释完全正确的条件子集，各模型的子集大小可能不同。
+
+```sh
+CUDA_VISIBLE_DEVICES=0 python -u tools/models/run_dual_ablation.py \
+  --data /path/dual-data --ime /path/release-checkpoint --base /path/Qwen3-0.6B-Base \
+  --reference /path/previous-dual-run/epoch-2 --output /path/new-ablation \
+  --scorer-python /path/comet-env/bin/python --comet-checkpoint /path/comet/checkpoints/model.ckpt \
+  --comet-model Unbabel/wmt22-comet-da --comet-revision 2760a223ac957f30acfb18c8aa649b01cf1d75f2
+```
+
+COMET 在独立的开发环境安装 `unbabel-comet==2.2.7`，使用 CPU 评分。
+先完成三组训练和全部 GPU 生成，再评分；各组与旧模型同集结果写入 `comparison.json`。
+默认 microbatch 8、显存比例上限 0.25，可按训练卡资源显式调整；三组使用相同配置。
+
 ```sh
 python tools/models/keys_llm_eval.py --checkpoint /path/dual-run/epoch-2 \
   --input /path/dual-data/test.jsonl --output /path/dual-eval.json --batch-size 4

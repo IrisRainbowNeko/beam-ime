@@ -33,6 +33,18 @@ class KeysLlmFormatTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             build_prompt("nh", mode="translate_en", version="keys_llm_v1")
 
+    def test_chinese_first_contract_uses_same_prompt_and_normalized_fields(self):
+        version = 'keys_llm_v3'
+        self.assertEqual(build_prompt('mtj', mode='translate_en', version=version),
+                         build_prompt('mtj', mode='translate_en'))
+        output = build_target('明天见', mode='translate_en', translation='See you tomorrow.', version=version)
+        self.assertEqual(output, '结果：明天见\tSee you tomorrow.')
+        parsed = parse_output(output, 'translate_en', version)
+        self.assertEqual((parsed['result'], parsed['comment']), ('See you tomorrow.', '明天见'))
+        self.assertTrue(structural_valid('mtj', parsed))
+        for malformed in ('结果：明天见', '结果：\tHi', '结果：你好\t', '结果：你好\tHi\textra'):
+            self.assertIsNone(parse_output(malformed, 'translate_en', version)['result'])
+
     def test_pyseg_round_trips_through_target_and_parser(self):
         segments = split_pyseg("ZhebMBiY")
         self.assertEqual(segments, ["zheb", "m", "bi", "y"])

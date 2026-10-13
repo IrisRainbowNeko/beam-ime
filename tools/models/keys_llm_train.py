@@ -19,7 +19,10 @@ from typing import Any
 
 import torch
 
-from keys_llm_format import PROMPT_VERSION, build_prompt, build_target, MODES
+from keys_llm_format import CHINESE_FIRST_VERSION, DUAL_PROMPT_VERSIONS, PROMPT_VERSION, build_prompt, build_target, MODES
+
+IME, ENGLISH, COMMENT = 1, 2, 3
+FIELD_WEIGHTS = {ENGLISH: .3, COMMENT: .1}
 
 
 def sha256(path: Path) -> str:
@@ -45,15 +48,26 @@ def encode(tokenizer: Any, row: dict[str, Any], use_segments: bool, max_length: 
            version: str = PROMPT_VERSION) -> dict | None:
     mode = row.get("mode", "ime")
     prefix = build_prompt(row["keys"], row.get("context", ""), mode, version)
-    target = build_target(row["target"], row["segments"] if use_segments else None, mode, row.get("translation", ""))
+    target = build_target(row["target"], row["segments"] if use_segments else None, mode, row.get("translation", ""), version)
     if not use_segments:
         prefix += "结果："
         target = target[len("结果："):]
     prompt_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"]
-    target_ids = tokenizer(target, add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
+    if mode == 'translate_en':
+        encoded = tokenizer(target, add_special_tokens=False, return_offsets_mapping=True)
+        start = len(row['target']) + 1 if version == CHINESE_FIRST_VERSION else 0
+        end = start + len(row['translation'])
+        fields = [ENGLISH if hi > start and lo < end else COMMENT for lo, hi in encoded['offset_mapping']]
+        # Give EOS the same formatting weight in both output orders.
+        fields.append(COMMENT)
+        target_ids = encoded['input_ids'] + [tokenizer.eos_token_id]
+    else:
+        target_ids = tokenizer(target, add_special_tokens=False)["input_ids"] + [tokenizer.eos_token_id]
+        fields = [IME] * len(target_ids)
     if len(prompt_ids) + len(target_ids) > max_length:
         return None
-    return {"input_ids": prompt_ids + target_ids, "labels": [-100] * len(prompt_ids) + target_ids, "mode": mode}
+    return {"input_ids": prompt_ids + target_ids, "labels": [-100] * len(prompt_ids) + target_ids,
+            "fields": [0] * len(prompt_ids) + fields, "mode": mode}
 
 
 def batches(examples: list[dict], batch_size: int, rng: random.Random) -> list[list[dict]]:
@@ -115,17 +129,30 @@ def task_loss(logits, labels, total_tokens, weight, teacher_logits=None, teacher
     return loss * weight / total_tokens
 
 
+def field_loss(logits, labels, fields, totals):
+    losses = torch.nn.functional.cross_entropy(logits, labels, reduction='none')
+    return sum(losses[fields == field].sum() * weight / totals[field]
+               for field, weight in FIELD_WEIGHTS.items())
+
+
+def target_fields(batch):
+    return batch['fields'][:, 1:][batch['labels'][:, 1:] != -100]
+
+
 def collate(batch: list[dict], pad_id: int, device: torch.device) -> dict[str, torch.Tensor]:
     width = max(len(item["input_ids"]) for item in batch)
     ids = torch.full((len(batch), width), pad_id, dtype=torch.long)
     labels = torch.full((len(batch), width), -100, dtype=torch.long)
     mask = torch.zeros((len(batch), width), dtype=torch.long)
+    fields = torch.zeros((len(batch), width), dtype=torch.long)
     for row, item in enumerate(batch):
         size = len(item["input_ids"])
         ids[row, :size] = torch.tensor(item["input_ids"])
         labels[row, :size] = torch.tensor(item["labels"])
         mask[row, :size] = 1
-    return {"input_ids": ids.to(device), "labels": labels.to(device), "attention_mask": mask.to(device)}
+        fields[row, :size] = torch.tensor(item['fields'])
+    return {"input_ids": ids.to(device), "labels": labels.to(device), "attention_mask": mask.to(device),
+            "fields": fields.to(device)}
 
 
 @torch.no_grad()
@@ -135,14 +162,25 @@ def dev_loss(model: Any, examples: list[dict], pad_id: int, device: torch.device
     for mode in MODES:
         rows = [row for row in examples if row['mode'] == mode]
         total, count = 0.0, 0
+        field_sums = {field: 0.0 for field in FIELD_WEIGHTS}
+        field_counts = {field: 0 for field in FIELD_WEIGHTS}
         for start in range(0, len(rows), batch_size):
             batch = collate(rows[start:start + batch_size], pad_id, device)
             with torch.autocast(device.type, dtype=torch.bfloat16):
                 logits, labels = target_logits(model, batch)
-                loss = torch.nn.functional.cross_entropy(logits, labels, reduction='sum')
-            total += loss.item(); count += labels.numel()
+                losses = torch.nn.functional.cross_entropy(logits, labels, reduction='none')
+            total += losses.sum().item(); count += labels.numel()
+            if mode == 'translate_en':
+                fields = target_fields(batch)
+                for field in FIELD_WEIGHTS:
+                    selected = fields == field
+                    field_sums[field] += losses[selected].sum().item()
+                    field_counts[field] += selected.sum().item()
         if count:
             metrics[mode] = total / count
+        if mode == 'translate_en' and count:
+            for field, name in ((ENGLISH, 'english'), (COMMENT, 'comment')):
+                metrics['translate_en_' + name] = field_sums[field] / field_counts[field]
     model.train()
     return metrics
 
@@ -205,12 +243,13 @@ def train(args: argparse.Namespace) -> None:
     model.to(device)
     model.config.use_cache = False
     model.config.beam_prompt_version = args.prompt_version
-    model.config.beam_modes = list(MODES) if args.prompt_version == PROMPT_VERSION else ['ime']
+    dual_task = args.prompt_version in DUAL_PROMPT_VERSIONS
+    model.config.beam_modes = list(MODES) if dual_task else ['ime']
     model.train()
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, betas=(0.9, 0.95), fused=device.type == 'cuda',
     )
-    make_batches = task_batches if args.prompt_version == PROMPT_VERSION else batches
+    make_batches = task_batches if dual_task else batches
     steps_per_epoch = len(make_batches(train_examples, args.batch_size, random.Random(args.seed)))
     total_steps = steps_per_epoch * args.epochs
     warmup = max(1, int(total_steps * args.warmup_ratio))
@@ -226,7 +265,11 @@ def train(args: argparse.Namespace) -> None:
         "promptVersion": args.prompt_version,
         "teacherWeight": args.teacher_weight,
         "teacherPromptVersion": teacher_version,
-        "taskWeights": {'ime': .75, 'translate_en': .25} if args.prompt_version == PROMPT_VERSION else {'ime': 1},
+        "lossScheme": args.loss_scheme,
+        "taskWeights": ({'ime': .6, 'english': .3, 'comment': .1} if args.loss_scheme == 'field'
+                        else {'ime': .75, 'translate_en': .25}) if dual_task else {'ime': 1},
+        "translationOrder": 'chinese_first' if args.prompt_version == CHINESE_FIRST_VERSION else 'english_first',
+        "teacher": args.teacher or args.model,
         "model": args.model,
         "segments": args.segments,
         "train": {path: sha256(Path(path)) for path in args.train},
@@ -259,7 +302,10 @@ def train(args: argparse.Namespace) -> None:
             for mode in MODES:
                 items = [row for row in batch_items if row['mode'] == mode]
                 target_tokens = sum(sum(label != -100 for label in item['labels'][1:]) for item in items)
-                weight = (0.75 if mode == 'ime' else 0.25) if args.prompt_version == PROMPT_VERSION else 1.0
+                weight = (.75 if mode == 'ime' else .25) if dual_task else 1.0
+                if args.loss_scheme == 'field' and dual_task:
+                    weight = .6 if mode == 'ime' else .4
+                totals = {field: sum(item['fields'].count(field) for item in items) for field in FIELD_WEIGHTS}
                 for offset in range(0, len(items), args.micro_batch_size):
                     micro = items[offset:offset + args.micro_batch_size]
                     batch = collate(micro, pad_id, device)
@@ -269,7 +315,10 @@ def train(args: argparse.Namespace) -> None:
                             teacher_logits, _ = target_logits(teacher, collate([row['teacher'] for row in micro], pad_id, device))
                     with torch.autocast(device.type, dtype=torch.bfloat16):
                         logits, labels = target_logits(model, batch)
-                        loss = task_loss(logits, labels, target_tokens, weight, teacher_logits, args.teacher_weight)
+                        if mode == 'translate_en' and args.loss_scheme == 'field':
+                            loss = field_loss(logits, labels, target_fields(batch), totals)
+                        else:
+                            loss = task_loss(logits, labels, target_tokens, weight, teacher_logits, args.teacher_weight)
                     if not torch.isfinite(loss):
                         raise RuntimeError('non-finite training loss')
                     loss.backward()
@@ -310,7 +359,9 @@ def main() -> None:
     parser.add_argument("--dev", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--segments", action=argparse.BooleanOptionalAction, default=False)
-    parser.add_argument("--prompt-version", choices=('keys_llm_v1', PROMPT_VERSION), default=PROMPT_VERSION)
+    parser.add_argument("--prompt-version", choices=('keys_llm_v1', *DUAL_PROMPT_VERSIONS), default=PROMPT_VERSION)
+    parser.add_argument('--loss-scheme', choices=('task', 'field'), default='task',
+                        help='field: separately normalize IME/English/comment CE with weights .6/.3/.1')
     parser.add_argument("--teacher", help="old checkpoint for ordinary-task teacher KL; defaults to --model")
     parser.add_argument("--teacher-weight", type=float, default=0.25)
     parser.add_argument("--device", choices=('cpu', 'cuda'), default='cuda')

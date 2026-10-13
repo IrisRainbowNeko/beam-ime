@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -19,7 +20,7 @@ from typing import Any
 
 import torch
 
-from keys_llm_format import build_prompt, parse_output, strict_valid, structural_valid
+from keys_llm_format import DUAL_PROMPT_VERSIONS, PROMPT_VERSION, build_prompt, parse_output, strict_valid, structural_valid
 
 FILTERS = {
     "raw": lambda keys, parsed: parsed["result"] is not None,
@@ -37,10 +38,10 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def ranked_results(keys: str, texts: list[str], name: str, mode: str = 'ime') -> list[str]:
+def ranked_results(keys: str, texts: list[str], name: str, mode: str = 'ime', version: str = PROMPT_VERSION) -> list[str]:
     seen, ranked = set(), []
     for text in texts:
-        parsed = parse_output(text, mode)
+        parsed = parse_output(text, mode, version)
         result = parsed["result"]
         if FILTERS[name](keys, parsed) and result not in seen:
             seen.add(result)
@@ -53,15 +54,18 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
     for case in cases:
         groups["all"].append(case)
         groups[case.get('mode', 'ime')].append(case)
+        groups[f"{case.get('mode', 'ime')}:{case['variant']}"].append(case)
         groups[case["variant"]].append(case)
         seen = "seen" if case.get("seenTarget") else "unseen"
         groups[f"{case['variant']}:{seen}"].append(case)
-        if any(char.isascii() and char.isalpha() for char in case["target"]):
+        if any(char.isascii() and char.isalpha() for char in case["source"]):
             groups["withEnglish"].append(case)
             groups[f"{case['variant']}:withEnglish"].append(case)
+            groups[f"{case.get('mode', 'ime')}:withEnglish"].append(case)
         if case.get("hasContext"):
             groups["withContext"].append(case)
             groups[f"{case['variant']}:withContext"].append(case)
+            groups[f"{case.get('mode', 'ime')}:withContext"].append(case)
     metrics = {}
     for name, members in sorted(groups.items()):
         entry = {"rows": len(members)}
@@ -74,6 +78,8 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
         if bilingual:
             entry['pairedFormatRate'] = sum(case['paired'] for case in bilingual) / len(bilingual)
             entry['commentP@1'] = sum(case['comment'] == case['source'] for case in bilingual) / len(bilingual)
+            entry['englishContainsHanziRate'] = sum(bool(re.search('[一-鿿]', case['english'] or '')) for case in bilingual) / len(bilingual)
+            entry['missingEnglishRate'] = sum(not case['english'] for case in bilingual) / len(bilingual)
     return metrics
 
 
@@ -81,6 +87,8 @@ def summarize(cases: list[dict[str, Any]]) -> dict[str, Any]:
 def evaluate(args: argparse.Namespace) -> None:
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
+    if args.gpu_memory_fraction:
+        torch.cuda.set_per_process_memory_fraction(args.gpu_memory_fraction)
     rows = [json.loads(line) for line in Path(args.input).open(encoding="utf-8") if line.strip()]
     if args.mode:
         rows = [row for row in rows if row.get('mode', 'ime') == args.mode]
@@ -127,6 +135,9 @@ def evaluate(args: argparse.Namespace) -> None:
                                else 2 * len(rows[i]['keys'].replace("'", '')) + 8 for i in indices),
             pad_token_id=pad_id,
             eos_token_id=tokenizer.eos_token_id,
+            use_cache=True,
+            length_penalty=1.0,
+            repetition_penalty=1.0,
         )
         generated = output[:, encoded["input_ids"].shape[1]:]
         texts = ['结果：' + text for text in tokenizer.batch_decode(generated, skip_special_tokens=True)]
@@ -137,13 +148,15 @@ def evaluate(args: argparse.Namespace) -> None:
             beams = texts[offset * args.beams:(offset + 1) * args.beams]
             ranks, top = {}, {}
             for name in FILTERS:
-                ranked = ranked_results(row["keys"], beams, name, mode)
+                ranked = ranked_results(row["keys"], beams, name, mode, version)
                 top[name] = ranked[:5]
                 ranks[name] = ranked.index(target) + 1 if target in ranked else None
-            parsed = parse_output(beams[0], mode)
+            parsed = parse_output(beams[0], mode, version)
             cases[index] = {
                 "id": row["id"], "variant": row["variant"], "keys": row["keys"], "target": target, 'mode': mode,
                 'source': row['target'], 'comment': parsed.get('comment'), 'paired': structural_valid(row['keys'], parsed),
+                'english': parsed['result'] if mode == 'translate_en' else None,
+                'context': row.get('context', ''),
                 "hasContext": bool(row.get("context")),
                 "seenTarget": row.get("seenTarget"), "ranks": ranks, "top": top,
                 "beam0": beams[0],
@@ -159,6 +172,8 @@ def evaluate(args: argparse.Namespace) -> None:
         "input": args.input,
         "inputSha256": sha256(Path(args.input)),
         "beams": args.beams,
+        "decoding": {'useCache': True, 'lengthPenalty': 1.0, 'repetitionPenalty': 1.0},
+        "strictMetricsApplicable": any(case['beam0'].startswith('切分：') for case in finished),
         "dropContext": args.drop_context,
         "rows": len(finished),
         "elapsedSeconds": round(time.time() - started, 1),
@@ -178,7 +193,7 @@ def main() -> None:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument('--mode', choices=('ime', 'translate_en'))
-    parser.add_argument('--prompt-version', choices=('keys_llm_v1', 'keys_llm_v2'))
+    parser.add_argument('--prompt-version', choices=('keys_llm_v1', *DUAL_PROMPT_VERSIONS))
     parser.add_argument("--output", required=True)
     parser.add_argument("--beams", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -186,6 +201,7 @@ def main() -> None:
     parser.add_argument("--limit-per-variant", type=int)
     parser.add_argument("--drop-context", action="store_true", help="evaluate the same rows without context")
     parser.add_argument("--seen-from", nargs="*", help="training JSONL files that define seen targets")
+    parser.add_argument('--gpu-memory-fraction', type=float)
     evaluate(parser.parse_args())
 
 
