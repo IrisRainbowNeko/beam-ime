@@ -62,5 +62,7 @@
   {"mode":"translate_en","keys":"buxuyaoan zhuangCUDA","target":"不需要安装CUDA","translation":"You don't need to install CUDA.","context":""},
   {"mode":"translate_en","keys":"meiyourentongyi","target":"没有人同意","translation":"Nobody agrees.","context":""},
   {"mode":"translate_en","keys":"xiawu sandian ban","target":"下午三点半","translation":"3:30 p.m.","context":"会议几点开始"},
-  {"mode":"translate_en","keys":"keyimafan niyixia ma","target":"可以麻烦你一下吗","translation":"Could you help me for a moment?","context":""}
+  {"mode":"translate_en","keys":"keyimafan niyixia ma","target":"可以麻烦你一下吗","translation":"Could you help me for a moment?","context":""},
+  {"mode":"translate_en","keys":"d","target":"的","translation":"","translation_status":"need_more_input","context":""},
+  {"mode":"translate_en","keys":"le","target":"了","translation":"","translation_status":"need_more_input","context":""}
 ]

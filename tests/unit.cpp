@@ -22,6 +22,15 @@ int main() {
     auto translated = parse_candidate("See you tomorrow.\t明天见", "mtj", InputMode::TranslateEn);
     check(translated && translated->text == "See you tomorrow." && translated->comment == "明天见", "paired translation");
     check(bool(parse_candidate("3:30\t三点半", "sdb", InputMode::TranslateEn)), "numeric translation");
+    auto waiting = parse_candidate("的\t<WAIT>", "d", InputMode::TranslateEn, kPromptV4);
+    check(waiting && waiting->need_more_input && waiting->text.empty() && waiting->comment == "的", "waiting candidate");
+    auto fragment = parse_candidate("看看\tTake a look", "kk", InputMode::TranslateEn, kPromptV4);
+    check(fragment && !fragment->need_more_input && fragment->text == "Take a look", "Chinese-first fragment");
+    check(!parse_candidate("做其他\tDo其他.", "zuoqt", InputMode::TranslateEn, kPromptV4), "reject Hanzi in English");
+    check(task_prompt("d", "你好", InputMode::TranslateEn, kPromptV4) == "任务：译英\n上文：你好\n按键：d\n结果：", "v4 prompt");
+    float score = bilingual_score({-1.f, -.1f, -2.f}, {"你好", "\t", "Hello"}, kPromptV4);
+    check(std::abs(score + 1.25f) < 1e-6f, "bilingual field score ignores tab");
+    check(!std::isfinite(bilingual_score({-1.f}, {"你好"}, kPromptV4)), "missing English has no score");
     for (auto text : {"Hello", "\t你好", "Hi\t你好\textra", "Hi\t你好\n", "Hi\t使用Linux"})
         check(!parse_candidate(text, "nh", InputMode::TranslateEn), "reject incomplete translation");
     check(output_budget(InputMode::TranslateEn, 40) == 192 && output_budget(InputMode::Ime, 10) == 28, "task budgets");

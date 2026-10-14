@@ -15,7 +15,10 @@ from typing import Any
 
 PROMPT_VERSION = "keys_llm_v2"
 CHINESE_FIRST_VERSION = "keys_llm_v3"
-DUAL_PROMPT_VERSIONS = (PROMPT_VERSION, CHINESE_FIRST_VERSION)
+FRAGMENT_VERSION = "keys_llm_v4"
+CHINESE_FIRST_VERSIONS = (CHINESE_FIRST_VERSION, FRAGMENT_VERSION)
+DUAL_PROMPT_VERSIONS = (PROMPT_VERSION, *CHINESE_FIRST_VERSIONS)
+WAIT_MARKER = "<WAIT>"
 MODES = ("ime", "translate_en")
 KEY_PATTERN = re.compile(r"[a-z' ]+")
 HAN_PATTERN = re.compile(r"[一-鿿]+")
@@ -53,11 +56,17 @@ def build_prompt(keys: str, context: str = "", mode: str = "ime", version: str =
 
 
 def build_target(target: str, segments: list[str] | None = None, mode: str = "ime", translation: str = "",
-                 version: str = PROMPT_VERSION) -> str:
+                 version: str = PROMPT_VERSION, translation_status: str = 'ready') -> str:
     if mode == "translate_en":
+        if translation_status == 'need_more_input':
+            if version != FRAGMENT_VERSION or translation:
+                raise ValueError('waiting requires keys_llm_v4 and no English text')
+            translation = WAIT_MARKER
+        elif translation_status != 'ready' or translation == WAIT_MARKER:
+            raise ValueError('invalid translation status')
         if segments is not None or not target or not translation.strip() or any(c in translation + target for c in "\t\r\n"):
             raise ValueError("translation requires two nonempty single-line fields")
-        fields = (target, translation) if version == CHINESE_FIRST_VERSION else (translation, target)
+        fields = (target, translation) if version in CHINESE_FIRST_VERSIONS else (translation, target)
         return RESULT_PREFIX + '\t'.join(fields)
     if mode != "ime":
         raise ValueError("invalid_mode")
@@ -83,7 +92,11 @@ def parse_output(text: str, mode: str = "ime", version: str = PROMPT_VERSION) ->
         if body.count("\t") != 1 or any(c in body for c in "\r\n"):
             return invalid
         first, second = body.split("\t")
-        chinese, english = (first, second) if version == CHINESE_FIRST_VERSION else (second, first)
+        chinese, english = (first, second) if version in CHINESE_FIRST_VERSIONS else (second, first)
+        if version == FRAGMENT_VERSION and chinese and english == WAIT_MARKER:
+            return {'segments': None, 'result': None, 'comment': chinese, 'translation_status': 'need_more_input'}
+        if WAIT_MARKER in english:
+            return invalid
         if not chinese or not re.search(r"[A-Za-z0-9]", english) or any(ord(c) < 32 or ord(c) == 127 for c in english):
             return invalid
         return {"segments": None, "result": english, "comment": chinese}
@@ -97,6 +110,31 @@ def parse_output(text: str, mode: str = "ime", version: str = PROMPT_VERSION) ->
         return {"segments": segments, "result": None}
     result = text[len(RESULT_PREFIX):].split("\n", 1)[0].strip()
     return {"segments": segments, "result": result or None}
+
+
+def display_valid(keys: str, parsed: dict[str, Any]) -> bool:
+    """Validate phonetic coverage and an English-only translation at the model boundary."""
+    text = parsed.get('comment', parsed['result'])
+    pieces = units(text) if text else None
+    if not pieces:
+        return False
+    if parsed.get('comment') is not None and parsed.get('translation_status') != 'need_more_input':
+        if not parsed['result'] or HAN_PATTERN.search(parsed['result']):
+            return False
+    code, reachable = letters(keys), {0}
+    for piece in pieces:
+        following = set()
+        for position in reachable:
+            if ENGLISH_PATTERN.fullmatch(piece):
+                if code.startswith(piece.lower(), position):
+                    following.add(position + len(piece))
+            else:
+                for reading in readings(piece):
+                    for width in range(1, len(reading) + 1):
+                        if code.startswith(reading[:width], position):
+                            following.add(position + width)
+        reachable = following
+    return len(code) in reachable
 
 
 @lru_cache(maxsize=65536)

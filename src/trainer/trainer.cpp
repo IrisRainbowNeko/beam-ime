@@ -110,7 +110,7 @@ struct Trainer {
           pronunciation(fs::u8path(component.at("pinyin").get<std::string>())) {
         prompt_version = component.value("prompt_version", "");
         if (component.value("schemaVersion", 0) != 2 || component.value("recipe", "") != recipe ||
-            (prompt_version != beam::kPromptV1 && prompt_version != beam::kPromptV2)) throw std::runtime_error("incompatible trainer component");
+            (prompt_version != beam::kPromptV1 && !beam::dual_prompt(prompt_version))) throw std::runtime_error("incompatible trainer component");
         backend = component.at("backend");
         if (backend != "vulkan" && backend != "cpu") throw std::runtime_error("unsupported training backend");
         std::ifstream input(fs::u8path(job.at("model").get<std::string>()), std::ios::binary);
@@ -152,7 +152,14 @@ struct Trainer {
     }
     Json encode(const Json & row) const {
         std::string output = row.at("target");
-        if (row.value("mode", "ime") == "translate_en") output = row.at("translation").get<std::string>() + "\t" + output;
+        if (row.value("mode", "ime") == "translate_en") {
+            std::string english = row.value("translation", "");
+            if (row.value("translation_status", "ready") == "need_more_input") {
+                if (prompt_version != beam::kPromptV4 || !english.empty()) throw std::runtime_error("invalid waiting replay example");
+                english = "<WAIT>";
+            }
+            output = beam::chinese_first(prompt_version) ? output + "\t" + english : english + "\t" + output;
+        }
         auto prefix = tokenize(prompt(row)), target = tokenize(output);
         target.push_back(llama_vocab_eos(vocab));
         const size_t start = prefix.size();
@@ -338,12 +345,13 @@ struct Trainer {
         if (recent.empty()) throw std::runtime_error("training snapshot contains no recent events");
         std::vector<size_t> generic, collisions, translations;
         for (const auto & row : replay) {
+            if (row.value("translation_status", "ready") == "need_more_input" && prompt_version != beam::kPromptV4) continue;
             auto mode = beam::input_mode(row.value("mode", "ime"));
             if (mode == beam::InputMode::TranslateEn && prompt_version == beam::kPromptV1) continue;
             auto & pool = mode == beam::InputMode::Ime ? generic : translations;
             pool.push_back(samples.size()); samples.push_back(teacher(row));
         }
-        if (generic.empty() || (prompt_version == beam::kPromptV2 && translations.empty()))
+        if (generic.empty() || (beam::dual_prompt(prompt_version) && translations.empty()))
             throw std::runtime_error("component is missing task replay examples");
         for (const auto & row : collision) { collisions.push_back(samples.size()); samples.push_back(teacher(row)); }
         std::mt19937 random((uint32_t)std::stoul(digest(job.at("id").get<std::string>()).substr(0, 8), nullptr, 16));
@@ -355,7 +363,7 @@ struct Trainer {
                 const auto & events = i < 8 || history.empty() ? recent : history;
                 selected.push_back(pick(pick(pick(events))));
             }
-            if (prompt_version == beam::kPromptV2) {
+            if (beam::dual_prompt(prompt_version)) {
                 selected.push_back(pick(generic)); selected.push_back(pick(collisions.empty() ? generic : collisions));
                 selected.push_back(pick(translations)); selected.push_back(pick(translations));
             } else for (int i = 0; i < 4; ++i) selected.push_back(pick(i >= 2 && !collisions.empty() ? collisions : generic));

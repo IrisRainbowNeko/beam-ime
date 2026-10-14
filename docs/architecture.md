@@ -8,9 +8,12 @@ Fcitx5-Rime / Weasel 调用 `beam_processor` 和 `beam_translator`。
 输入 prompt 为可选的 `上文：...`、按空格分隔的完整按键和 `结果：`。
 `keys_llm_v2` 在最前面添加 `任务：输入` 或 `任务：译英`，其余输入格式相同。
 译英目标为 `See you tomorrow.\t明天见`，其中 `\t` 是实际制表符。
+`keys_llm_v3` 和 `keys_llm_v4` 改为 `明天见\tSee you tomorrow.`，输入格式相同。
+v4 对无法独立表达的片段输出 `中文\t<WAIT>`；标记使用现有词表，不上屏。
 英文与中文注释来自同一条自回归生成序列，模型、CPU/Vulkan 后端和个人适配器共用。
 增量 Top-1 复用 KV 前缀，并批量验证前一次输出作为草稿；随后在预算内完成 beam search。
 中英文结构对齐检查不等价于逐字拼音硬约束，不能保证每个候选读音都与输入一致。
+v4 译英另外按随包拼音资源检查中文读音覆盖，并排除英文正文中的汉字。
 
 ## 本机协议 v1
 
@@ -27,6 +30,11 @@ Linux 使用用户私有 Unix socket，默认 `$XDG_RUNTIME_DIR/beam-ime/beamd.s
 `id` 为非负整数。成功响应包含相同 id、`ok:true`，查询还包含 `candidates`、
 `greedy_ms`、`beam_ms`、`beam_complete`、同序 `comments` 和 `mode`。
 缺省模式为 `ime`，其注释为空字符串；译英正文在 `candidates`、中文在 `comments`，候选上屏只取正文。
+译英响应另有 `translation_status: ready | need_more_input`。最高排名有效结果要求等待时，
+返回空候选；Rime 显示“继续输入”并保留按键，空格不会提交原始拼音。
+格式错误、超时和需要继续输入分别显示。`ready` 下的空数组表示没有有效候选。
+GGUF 可通过 `beam.decoding_strategy` 选择 `beam`、`greedy_first` 或 `field`；后两项仅影响译英，
+由固定公开验证集选定。字段评分复用本次搜索的 token 概率，不增加第二次语义推理。
 health 包含 `version`、`protocol`、`model`、`backend`、`prompt_version` 和 `modes`。
 GGUF 的 `beam.prompt_version` 决定任务能力；缺失时按 `keys_llm_v1` 普通输入处理。
 旧模型的译英请求返回 `unsupported_mode`，未知模式返回 `invalid_mode`。

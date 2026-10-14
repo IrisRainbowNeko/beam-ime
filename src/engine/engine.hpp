@@ -17,6 +17,7 @@ struct EngineOptions {
     int beams = 5;
     int context_chars = 64;   // matches the training data
     std::string backend_dir;
+    std::string pinyin_path;
 };
 
 struct QueryOptions {
@@ -31,6 +32,7 @@ struct QueryResult {
     double greedy_ms = 0;
     double beam_ms = 0;
     bool beam_complete = false;
+    std::string translation_status = "ready";
 };
 
 class Engine {

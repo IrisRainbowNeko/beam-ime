@@ -1,6 +1,7 @@
 #include "engine.hpp"
 
 #include "keys.hpp"
+#include "store.hpp"
 #include "llama.h"
 
 #include <algorithm>
@@ -28,6 +29,7 @@ struct Beam {
     std::vector<llama_token> toks;
     float score;
     int seq;
+    std::vector<float> probabilities;
 };
 
 }  // namespace
@@ -37,6 +39,7 @@ struct Engine::Impl {
     std::string name;
     std::string backend = "cpu";
     std::string prompt_version = kPromptV1;
+    std::string decoding_strategy = "beam";
     InputMode mode = InputMode::Ime;
     bool greedy_finished = false;
     llama_model * model = nullptr;
@@ -46,6 +49,7 @@ struct Engine::Impl {
     llama_batch batch = {};
     llama_adapter_lora * adapter = nullptr;
     int n_vocab = 0;
+    std::unique_ptr<Pronunciations> pronunciation;
 
     std::vector<llama_token> cached;       // seq 0 tokens in the KV cache
     std::vector<llama_token> greedy_out;   // last Top-1 tokens (draft for the next query)
@@ -98,11 +102,20 @@ struct Engine::Impl {
         if (length > 0) {
             if (length >= (int)sizeof(version)) { llama_model_free(model); model = nullptr; throw std::runtime_error("unsupported prompt version"); }
             prompt_version.assign(version, length);
-            if (prompt_version != kPromptV1 && prompt_version != kPromptV2) {
+            if (prompt_version != kPromptV1 && !dual_prompt(prompt_version)) {
                 llama_model_free(model); model = nullptr;
                 throw std::runtime_error("unsupported prompt version");
             }
         }
+        if (prompt_version == kPromptV4) {
+            try { pronunciation = std::make_unique<Pronunciations>(std::filesystem::u8path(o.pinyin_path)); }
+            catch (...) { llama_model_free(model); model = nullptr; throw; }
+        }
+        length = llama_model_meta_val_str(model, "beam.decoding_strategy", version, sizeof(version));
+        if (length >= (int)sizeof(version)) { llama_model_free(model); model = nullptr; throw std::runtime_error("unsupported decoding strategy"); }
+        if (length > 0) decoding_strategy.assign(version, length);
+        if (decoding_strategy != "beam" && decoding_strategy != "greedy_first" && decoding_strategy != "field")
+            { llama_model_free(model); model = nullptr; throw std::runtime_error("unsupported decoding strategy"); }
         if (mp.n_gpu_layers > 0) {
             auto device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
             if (!device) device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
@@ -295,13 +308,23 @@ struct Engine::Impl {
                 if (n_next >= B) break;
                 auto & t = beams[c.parent].toks;
                 if (stops(c.tok)) {
-                    if (!t.empty()) finished.push_back({c.score / (float) (t.size() + 1), t});
+                    if (!t.empty()) {
+                        float score = c.score / (float) (t.size() + 1);
+                        if (mode == InputMode::TranslateEn && decoding_strategy == "field") {
+                            std::vector<std::string> pieces;
+                            for (auto token : t) pieces.push_back(piece(token));
+                            score = bilingual_score(beams[c.parent].probabilities, pieces, prompt_version);
+                        }
+                        finished.push_back({score, t});
+                    }
                     continue;
                 }
                 auto & child = next[n_next++];
                 child.toks = t;
                 child.toks.push_back(c.tok);
                 child.score = c.score;
+                child.probabilities = beams[c.parent].probabilities;
+                child.probabilities.push_back(c.score - beams[c.parent].score);
                 parent_seqs.push_back(beams[c.parent].seq);
             }
             next.resize(n_next);
@@ -336,7 +359,6 @@ struct Engine::Impl {
         }
         for (int s = 1; s <= 2 * B; ++s) llama_memory_seq_rm(mem, s, -1, -1);
         if (!ok) return false;
-        for (auto & b : beams) finished.push_back({b.score / (float) (b.toks.size() + 1), b.toks});
         std::sort(finished.begin(), finished.end(), [](auto & a, auto & b) { return a.first > b.first; });
         out.clear();
         for (auto & [s, t] : finished) out.push_back({s, detok(t)});
@@ -351,7 +373,7 @@ bool Engine::ok() const { return impl_->ctx != nullptr; }
 const std::string & Engine::model_name() const { return impl_->name; }
 const std::string & Engine::backend_name() const { return impl_->backend; }
 const std::string & Engine::prompt_version() const { return impl_->prompt_version; }
-bool Engine::supports(InputMode mode) const { return mode == InputMode::Ime || impl_->prompt_version == kPromptV2; }
+bool Engine::supports(InputMode mode) const { return mode == InputMode::Ime || dual_prompt(impl_->prompt_version); }
 
 bool Engine::set_adapter(const std::string & path, std::string & error) {
     auto & m = *impl_;
@@ -385,6 +407,12 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
     if (!m.greedy(prompt, max_new)) return result;
     result.greedy_ms = ms_since(t0);
     std::string top = m.detok(m.greedy_out);
+    auto parse = [&](const std::string & text) {
+        auto parsed = parse_candidate(text, keys, options.mode, m.prompt_version);
+        if (parsed && options.mode == InputMode::TranslateEn && m.pronunciation && m.pronunciation->align(parsed->comment, keys).empty())
+            return std::optional<TaskCandidate>{};
+        return parsed;
+    };
 
     std::vector<std::string> ranked, folded;
     if (options.beam_budget_ms > 0 && options.max_candidates > 1) {
@@ -395,7 +423,7 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
             // Candidates differing only in English letter case collapse to the best-ranked casing.
             for (auto & [s, text] : fin) {
                 if ((int) ranked.size() >= options.max_candidates) break;
-                auto parsed = parse_candidate(text, keys, options.mode);
+                auto parsed = parse(text);
                 std::string f = parsed ? (options.mode == InputMode::Ime ? fold_case(parsed->text) : parsed->text) : "";
                 if (parsed && std::find(folded.begin(), folded.end(), f) == folded.end()) {
                     ranked.push_back(text);
@@ -406,9 +434,15 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
         }
         result.beam_ms = ms_since(t1);
     }
-    auto parsed_top = options.mode == InputMode::TranslateEn && !m.greedy_finished ? std::nullopt : parse_candidate(top, keys, options.mode);
+    auto parsed_top = !m.greedy_finished ? std::nullopt : parse(top);
     auto top_id = parsed_top ? (options.mode == InputMode::Ime ? fold_case(parsed_top->text) : parsed_top->text) : "";
-    if (parsed_top && std::find(folded.begin(), folded.end(), top_id) == folded.end()) {
+    if (parsed_top && options.mode == InputMode::TranslateEn && m.decoding_strategy == "greedy_first") {
+        ranked.erase(std::remove_if(ranked.begin(), ranked.end(), [&](const std::string & text) {
+            return parse(text)->text == parsed_top->text;
+        }), ranked.end());
+        ranked.insert(ranked.begin(), top);
+        if ((int)ranked.size() > options.max_candidates) ranked.pop_back();
+    } else if (parsed_top && std::find(folded.begin(), folded.end(), top_id) == folded.end()) {
         if (ranked.empty()) ranked.push_back(top);
         else {
             if ((int) ranked.size() >= options.max_candidates) ranked.pop_back();
@@ -416,7 +450,11 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
         }
     }
     for (const auto & text : ranked) {
-        auto candidate = parse_candidate(text, keys, options.mode);
+        auto candidate = parse(text);
+        if (candidate->need_more_input) {
+            if (result.candidates.empty()) { result.translation_status = "need_more_input"; return result; }
+            continue;
+        }
         result.candidates.push_back(candidate->text);
         result.comments.push_back(candidate->comment);
     }

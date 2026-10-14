@@ -22,7 +22,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("input")
     parser.add_argument("output")
-    parser.add_argument("--prompt-version", choices=["keys_llm_v1", "keys_llm_v2"])
+    parser.add_argument("--prompt-version", choices=["keys_llm_v1", "keys_llm_v2", "keys_llm_v3", "keys_llm_v4"])
+    parser.add_argument('--decoding-strategy', choices=('beam', 'greedy_first', 'field'))
     args = parser.parse_args()
 
     reader = gguf.GGUFReader(args.input)
@@ -41,11 +42,15 @@ def main() -> None:
             continue
         if args.prompt_version and field.name == "beam.prompt_version":
             continue
+        if args.decoding_strategy and field.name == 'beam.decoding_strategy':
+            continue
         val_type = field.types[0]
         sub_type = field.types[-1] if val_type == gguf.GGUFValueType.ARRAY else None
         writer.add_key_value(field.name, field.contents(), val_type, sub_type=sub_type)
     if args.prompt_version:
         writer.add_string("beam.prompt_version", args.prompt_version)
+    if args.decoding_strategy:
+        writer.add_string('beam.decoding_strategy', args.decoding_strategy)
     kept = [t for t in reader.tensors if t.name != "output.weight"]
     for t in kept:
         writer.add_tensor_info(t.name, t.data.shape, t.data.dtype, t.data.nbytes, t.tensor_type)

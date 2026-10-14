@@ -305,6 +305,8 @@ class BeamTranslator final : public ::rime::Translator {
                 return values.is_array() && std::all_of(values.begin(), values.end(), [](const auto & value) { return value.is_string(); });
             };
             if ((reply->contains("mode") && !(*reply)["mode"].is_string()) || !strings((*reply)["candidates"]) ||
+                (reply->contains("translation_status") && (!(*reply)["translation_status"].is_string() ||
+                 ((*reply)["translation_status"] != "ready" && (*reply)["translation_status"] != "need_more_input"))) ||
                 (reply->contains("comments") && !strings((*reply)["comments"])) ||
                 (reply->contains("sources") && !strings((*reply)["sources"]))) {
                 ctx->set_property("beam_translation_status", "invalid_response");
@@ -316,9 +318,14 @@ class BeamTranslator final : public ::rime::Translator {
             if (mode == "translate_en" && comments_.size() != candidates.size()) return nullptr;
             sources_ = reply->value("sources", std::vector<std::string>{});
             if (mode == "translate_en") {
-                const std::string state = candidates.empty() ? "no_candidate" : "ready";
+                const std::string state = reply->value("translation_status", "ready") == "need_more_input" ? "need_more_input" : candidates.empty() ? "no_candidate" : "ready";
+                if (state == "need_more_input" && !candidates.empty()) {
+                    ctx->set_property("beam_translation_status", "invalid_response");
+                    return nullptr;
+                }
                 if (ctx->get_property("beam_translation_status") != state) ctx->set_property("beam_translation_status", state);
-                if (candidates.empty()) ctx->composition().back().prompt = "暂无译英候选，可补充拼音或切回普通输入";
+                last_translation_status_ = state;
+                if (candidates.empty()) ctx->composition().back().prompt = state == "need_more_input" ? "继续输入" : "暂无译英候选，可补充拼音或切回普通输入";
             }
             typed_->sync(engine_);
             last_keys_ = keys;
@@ -327,7 +334,11 @@ class BeamTranslator final : public ::rime::Translator {
             last_candidates_ = candidates;
             last_generation_ = typed_->generation;
         }
-        if (candidates.empty()) return nullptr;
+        if (candidates.empty()) {
+            if (mode == "translate_en" && last_translation_status_ == "need_more_input") ctx->composition().back().prompt = "继续输入";
+            return nullptr;
+        }
+        if (mode == "translate_en") ctx->composition().back().prompt.clear();
 
         auto translation = ::rime::New<::rime::FifoTranslation>();
         double quality = 1000.0;
@@ -370,6 +381,7 @@ class BeamTranslator final : public ::rime::Translator {
     bool use_context_ = true;
     uint64_t last_generation_ = uint64_t(-1);
     std::string last_keys_, last_context_, last_mode_;
+    std::string last_translation_status_;
     std::vector<std::string> last_candidates_, sources_, comments_;
 };
 

@@ -9,17 +9,19 @@ bf16 checkpoints at each epoch end.
 from __future__ import annotations
 
 import argparse
+import collections
 import hashlib
 import json
 import math
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any
 
 import torch
 
-from keys_llm_format import CHINESE_FIRST_VERSION, DUAL_PROMPT_VERSIONS, PROMPT_VERSION, build_prompt, build_target, MODES
+from keys_llm_format import CHINESE_FIRST_VERSIONS, FRAGMENT_VERSION, WAIT_MARKER, DUAL_PROMPT_VERSIONS, PROMPT_VERSION, build_prompt, build_target, MODES
 
 IME, ENGLISH, COMMENT = 1, 2, 3
 FIELD_WEIGHTS = {ENGLISH: .3, COMMENT: .1}
@@ -48,15 +50,16 @@ def encode(tokenizer: Any, row: dict[str, Any], use_segments: bool, max_length: 
            version: str = PROMPT_VERSION) -> dict | None:
     mode = row.get("mode", "ime")
     prefix = build_prompt(row["keys"], row.get("context", ""), mode, version)
-    target = build_target(row["target"], row["segments"] if use_segments else None, mode, row.get("translation", ""), version)
+    status = row.get('translation_status', 'ready')
+    target = build_target(row["target"], row["segments"] if use_segments else None, mode, row.get("translation", ""), version, status)
     if not use_segments:
         prefix += "结果："
         target = target[len("结果："):]
     prompt_ids = tokenizer(prefix, add_special_tokens=False)["input_ids"]
     if mode == 'translate_en':
         encoded = tokenizer(target, add_special_tokens=False, return_offsets_mapping=True)
-        start = len(row['target']) + 1 if version == CHINESE_FIRST_VERSION else 0
-        end = start + len(row['translation'])
+        start = len(row['target']) + 1 if version in CHINESE_FIRST_VERSIONS else 0
+        end = start + len(WAIT_MARKER if status == 'need_more_input' else row['translation'])
         fields = [ENGLISH if hi > start and lo < end else COMMENT for lo, hi in encoded['offset_mapping']]
         # Give EOS the same formatting weight in both output orders.
         fields.append(COMMENT)
@@ -66,8 +69,15 @@ def encode(tokenizer: Any, row: dict[str, Any], use_segments: bool, max_length: 
         fields = [IME] * len(target_ids)
     if len(prompt_ids) + len(target_ids) > max_length:
         return None
+    content = ([hi <= len(row['target']) and hi > lo for lo, hi in encoded['offset_mapping']] + [False]
+               if mode == 'translate_en' and version in CHINESE_FIRST_VERSIONS else [True] * len(target_ids))
     return {"input_ids": prompt_ids + target_ids, "labels": [-100] * len(prompt_ids) + target_ids,
-            "fields": [0] * len(prompt_ids) + fields, "mode": mode}
+            "fields": [0] * len(prompt_ids) + fields, "mode": mode, 'chinese_content': content,
+            'length_bucket': 0 if len(row['target']) <= 2 else 1 if len(row['target']) <= 4 else 2,
+            'translation_status': status, 'context_kind': row.get('context_kind') or (
+                'mixed' if re.search('[一-鿿]', row.get('context', '')) and re.search('[A-Za-z]', row.get('context', ''))
+                else 'chinese' if re.search('[一-鿿]', row.get('context', ''))
+                else 'english' if row.get('context') else 'empty')}
 
 
 def batches(examples: list[dict], batch_size: int, rng: random.Random) -> list[list[dict]]:
@@ -105,6 +115,50 @@ def task_batches(examples: list[dict], batch_size: int, rng: random.Random) -> l
     return result
 
 
+def fragment_batches(examples, batch_size, rng):
+    if batch_size % 4:
+        raise ValueError('fragment batch size must be divisible by four')
+    pools = {(mode, bucket): [r for r in examples if r['mode'] == mode and r['length_bucket'] == bucket]
+             for mode in MODES for bucket in range(3)}
+    if any(not pool for pool in pools.values()):
+        raise ValueError('fragment sampling requires all task/length buckets')
+    waiting = [r for bucket in range(3) for r in pools['translate_en', bucket]
+               if r['translation_status'] == 'need_more_input']
+    contexts = {(mode, bucket, kind): [r for r in pool if r['context_kind'] == kind
+                and (mode == 'ime' or r['translation_status'] == 'ready')]
+                for (mode, bucket), pool in pools.items() for kind in ('chinese', 'english', 'mixed', 'empty')}
+    count = max(math.ceil(sum(len(pools[mode, b]) for b in range(3)) / width)
+                for mode, width in (('ime', batch_size * 3 // 4), ('translate_en', batch_size // 4)))
+    result = []
+    for _ in range(count):
+        batch = []
+        for mode, width in (('ime', batch_size * 3 // 4), ('translate_en', batch_size // 4)):
+            lengths = [round(width * .5), round(width * .3)]
+            lengths.append(width - sum(lengths))
+            selected_wait = collections.defaultdict(list)
+            if mode == 'translate_en':
+                for _ in range(round(width * .1)):
+                    available = [r for r in waiting if len(selected_wait[r['length_bucket']]) < lengths[r['length_bucket']]]
+                    if not available:
+                        raise ValueError('missing waiting translation training examples')
+                    row = rng.choice(available)
+                    selected_wait[row['length_bucket']].append(row)
+            for bucket, n in enumerate(lengths):
+                if mode == 'translate_en':
+                    nw = len(selected_wait[bucket])
+                    batch.extend(selected_wait[bucket])
+                    n -= nw
+                amounts = [round(n * .5), round(n * .25), round(n * .15)]
+                amounts.append(n - sum(amounts))
+                for kind, amount in zip(('chinese', 'english', 'mixed', 'empty'), amounts):
+                    contextual = contexts[mode, bucket, kind]
+                    if amount and not contextual:
+                        raise ValueError(f'missing fragment context bucket: {mode}/{bucket}/{kind}')
+                    batch.extend(rng.choices(contextual, k=amount))
+        result.append(batch)
+    return result
+
+
 def validation_examples(examples: list[dict], seed: int) -> list[dict]:
     rng = random.Random(seed)
     selected = []
@@ -135,8 +189,52 @@ def field_loss(logits, labels, fields, totals):
                for field, weight in FIELD_WEIGHTS.items())
 
 
+def sample_field_loss(logits, labels, fields, counts, mode, total_examples, teacher_logits=None, teacher_indices=None):
+    """Per-example field means preserve short examples and microbatch equivalence."""
+    losses = torch.nn.functional.cross_entropy(logits, labels, reduction='none')
+    total = logits.sum() * 0
+    offset = teacher_offset = 0
+    weights = {IME: .65} if mode == 'ime' else {COMMENT: .15, ENGLISH: .20}
+    for index, count in enumerate(counts):
+        piece = losses[offset:offset + count]
+        for field, weight in weights.items():
+            selected = fields[offset:offset + count] == field
+            if selected.any():
+                total = total + weight * piece[selected].mean()
+        if teacher_logits is not None:
+            pairs, teacher_count = teacher_indices[index]
+            if pairs:
+                student_idx, teacher_idx = zip(*pairs)
+                student = logits[offset + torch.tensor(student_idx, device=logits.device)]
+                reference = teacher_logits[teacher_offset + torch.tensor(teacher_idx, device=logits.device)]
+                kl = torch.nn.functional.kl_div(student.log_softmax(-1), reference.log_softmax(-1),
+                                                log_target=True, reduction='sum') / len(pairs)
+                total = total + (.325 if mode == 'ime' else .075) * kl
+            teacher_offset += teacher_count
+        offset += count
+    return total / total_examples
+
+
 def target_fields(batch):
     return batch['fields'][:, 1:][batch['labels'][:, 1:] != -100]
+
+
+def english_log_prob(model, examples, pad_id, device):
+    batch = collate(examples, pad_id, device)
+    logits, labels = target_logits(model, batch)
+    log_probs = logits.log_softmax(-1).gather(1, labels[:, None]).squeeze(1)
+    fields = target_fields(batch)
+    offset, values = 0, []
+    for example in examples:
+        count = sum(label != -100 for label in example['labels'])
+        mask = fields[offset:offset + count] == ENGLISH
+        values.append(log_probs[offset:offset + count][mask].sum())
+        offset += count
+    return torch.stack(values)
+
+
+def preference_loss(chosen, rejected, reference_chosen, reference_rejected, beta=.1):
+    return -torch.nn.functional.logsigmoid(beta * ((chosen - rejected) - (reference_chosen - reference_rejected))).mean()
 
 
 def collate(batch: list[dict], pad_id: int, device: torch.device) -> dict[str, torch.Tensor]:
@@ -212,10 +310,20 @@ def train(args: argparse.Namespace) -> None:
         encoded = []
         for row in read_rows(path, limit):
             item = encode(tokenizer, row, args.segments, args.max_length, args.prompt_version)
-            if item is not None and item['mode'] == 'ime' and args.teacher_weight:
-                item['teacher'] = encode(tokenizer, row, args.segments, args.max_length, teacher_version)
+            if item is not None and args.teacher_weight and (item['mode'] == 'ime' or args.loss_scheme == 'sample_field'):
+                item['teacher'] = encode(tokenizer, {**row, 'mode': 'ime'}, args.segments, args.max_length, teacher_version)
                 if item['teacher'] is None:
                     item = None
+                else:
+                    targets = [t for t in item['labels'] if t != -100]
+                    reference = [t for t in item['teacher']['labels'] if t != -100]
+                    pairs = []
+                    for position, (a, b) in enumerate(zip(targets, reference)):
+                        if a != b:
+                            break
+                        if item['chinese_content'][position]:
+                            pairs.append((position, position))
+                    item['teacher_indices'] = (pairs, len(reference))
             encoded.append(item)
         kept = [item for item in encoded if item is not None]
         return kept, len(encoded) - len(kept)
@@ -246,12 +354,29 @@ def train(args: argparse.Namespace) -> None:
     dual_task = args.prompt_version in DUAL_PROMPT_VERSIONS
     model.config.beam_modes = list(MODES) if dual_task else ['ime']
     model.train()
+    preferences, reference_model = [], None
+    if getattr(args, 'preferences', None):
+        for row in read_rows(Path(args.preferences), 8000):
+            if row['chosen'] == row['rejected'] or not row['chosen'] or not row['rejected']:
+                raise ValueError('invalid preference pair')
+            pair = [encode(tokenizer, {**row, 'mode': 'translate_en', 'translation': row[key], 'translation_status': 'ready'},
+                           False, args.max_length, args.prompt_version) for key in ('chosen', 'rejected')]
+            if any(item is None for item in pair):
+                raise ValueError('preference pair exceeds model input limit')
+            preferences.append(pair)
+        if len(preferences) != 8000:
+            raise ValueError('D3 requires exactly 8000 preference pairs')
+        reference_model = AutoModelForCausalLM.from_pretrained(args.model, torch_dtype=torch.bfloat16,
+                                                              attn_implementation='sdpa').to(device).eval()
+        reference_model.requires_grad_(False)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, betas=(0.9, 0.95), fused=device.type == 'cuda',
     )
-    make_batches = task_batches if dual_task else batches
+    make_batches = fragment_batches if getattr(args, 'fragment_sampling', False) else task_batches if dual_task else batches
     steps_per_epoch = len(make_batches(train_examples, args.batch_size, random.Random(args.seed)))
     total_steps = steps_per_epoch * args.epochs
+    if getattr(args, 'max_steps', None):
+        total_steps = min(total_steps, args.max_steps)
     warmup = max(1, int(total_steps * args.warmup_ratio))
 
     def lr_at(step: int) -> float:
@@ -266,9 +391,13 @@ def train(args: argparse.Namespace) -> None:
         "teacherWeight": args.teacher_weight,
         "teacherPromptVersion": teacher_version,
         "lossScheme": args.loss_scheme,
-        "taskWeights": ({'ime': .6, 'english': .3, 'comment': .1} if args.loss_scheme == 'field'
+        'preferences': ({'path': args.preferences, 'sha256': sha256(Path(args.preferences)), 'pairs': len(preferences),
+                         'beta': .1, 'weight': .1, 'batchSize': 40, 'reference': args.model} if preferences else None),
+        "taskWeights": ({'ime': .65, 'english': .2, 'comment': .15, 'imeKL': .325, 'commentKL': .075}
+                        if args.loss_scheme == 'sample_field' else {'ime': .6, 'english': .3, 'comment': .1} if args.loss_scheme == 'field'
                         else {'ime': .75, 'translate_en': .25}) if dual_task else {'ime': 1},
-        "translationOrder": 'chinese_first' if args.prompt_version == CHINESE_FIRST_VERSION else 'english_first',
+        "translationOrder": 'chinese_first' if args.prompt_version in CHINESE_FIRST_VERSIONS else 'english_first',
+        'fragmentSampling': getattr(args, 'fragment_sampling', False),
         "teacher": args.teacher or args.model,
         "model": args.model,
         "segments": args.segments,
@@ -310,12 +439,16 @@ def train(args: argparse.Namespace) -> None:
                     micro = items[offset:offset + args.micro_batch_size]
                     batch = collate(micro, pad_id, device)
                     teacher_logits = None
-                    if teacher is not None and mode == 'ime':
+                    if teacher is not None and (mode == 'ime' or args.loss_scheme == 'sample_field'):
                         with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16):
                             teacher_logits, _ = target_logits(teacher, collate([row['teacher'] for row in micro], pad_id, device))
                     with torch.autocast(device.type, dtype=torch.bfloat16):
                         logits, labels = target_logits(model, batch)
-                        if mode == 'translate_en' and args.loss_scheme == 'field':
+                        if args.loss_scheme == 'sample_field':
+                            counts = [sum(label != -100 for label in item['labels']) for item in micro]
+                            loss = sample_field_loss(logits, labels, target_fields(batch), counts, mode, len(items),
+                                                     teacher_logits, [item['teacher_indices'] for item in micro] if teacher is not None else None)
+                        elif mode == 'translate_en' and args.loss_scheme == 'field':
                             loss = field_loss(logits, labels, target_fields(batch), totals)
                         else:
                             loss = task_loss(logits, labels, target_tokens, weight, teacher_logits, args.teacher_weight)
@@ -324,6 +457,19 @@ def train(args: argparse.Namespace) -> None:
                     loss.backward()
                     loss_value += loss.item()
                     del logits, loss, teacher_logits
+            if preferences:
+                pairs = [preferences[(step * 40 + i) % len(preferences)] for i in range(40)]
+                for offset in range(0, 40, args.micro_batch_size):
+                    micro = pairs[offset:offset + args.micro_batch_size]
+                    chosen, rejected = [p[0] for p in micro], [p[1] for p in micro]
+                    with torch.no_grad(), torch.autocast(device.type, dtype=torch.bfloat16):
+                        rc = english_log_prob(reference_model, chosen, pad_id, device)
+                        rr = english_log_prob(reference_model, rejected, pad_id, device)
+                    with torch.autocast(device.type, dtype=torch.bfloat16):
+                        pc = english_log_prob(model, chosen, pad_id, device)
+                        pr = english_log_prob(model, rejected, pad_id, device)
+                        loss = .1 * preference_loss(pc, pr, rc, rr) * len(micro) / 40
+                    loss.backward(); loss_value += loss.item()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
@@ -341,11 +487,15 @@ def train(args: argparse.Namespace) -> None:
                 log.flush()
                 print(json.dumps(record), flush=True)
                 running, running_steps = 0.0, 0
+            if step >= total_steps:
+                break
         dev = dev_loss(model, dev_examples, pad_id, device, args.micro_batch_size)
         checkpoint = out / f"epoch-{epoch + 1}"
         save(model, tokenizer, checkpoint)
         history.append({"epoch": epoch + 1, "step": step, "devLoss": dev, "checkpoint": str(checkpoint)})
         print(json.dumps(history[-1]), flush=True)
+        if step >= total_steps:
+            break
     config["history"] = history
     log.close()
     config["elapsedSeconds"] = round(time.time() - started, 1)
@@ -360,11 +510,14 @@ def main() -> None:
     parser.add_argument("--output", required=True)
     parser.add_argument("--segments", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--prompt-version", choices=('keys_llm_v1', *DUAL_PROMPT_VERSIONS), default=PROMPT_VERSION)
-    parser.add_argument('--loss-scheme', choices=('task', 'field'), default='task',
+    parser.add_argument('--loss-scheme', choices=('task', 'field', 'sample_field'), default='task',
                         help='field: separately normalize IME/English/comment CE with weights .6/.3/.1')
     parser.add_argument("--teacher", help="old checkpoint for ordinary-task teacher KL; defaults to --model")
     parser.add_argument("--teacher-weight", type=float, default=0.25)
     parser.add_argument("--device", choices=('cpu', 'cuda'), default='cuda')
+    parser.add_argument('--fragment-sampling', action='store_true')
+    parser.add_argument('--preferences', help='8000 training-only English preference pairs for D3')
+    parser.add_argument('--max-steps', type=int)
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--micro-batch-size", type=int, default=4)

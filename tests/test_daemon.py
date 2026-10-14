@@ -19,7 +19,8 @@ class DaemonIntegration(unittest.TestCase):
         cls.endpoint = str(Path(cls.temp.name)/"runtime/beamd.sock")
         cls.process = subprocess.Popen([os.environ.get("BEAM_TEST_BINARY", "build/release/bin/beamd"),
             "--socket", cls.endpoint, "--learning-dir", str(Path(cls.temp.name)/'learning'),
-            "--model", os.environ["BEAM_TEST_MODEL"], "--ngl", os.environ.get("BEAM_TEST_NGL", "0")],
+            "--model", os.environ["BEAM_TEST_MODEL"], "--ngl", os.environ.get("BEAM_TEST_NGL", "0"),
+            *(['--backend-dir', os.environ['BEAM_TEST_BACKEND_DIR']] if os.environ.get('BEAM_TEST_BACKEND_DIR') else [])],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for attempt in range(200):
             if cls.process.poll() is not None: raise RuntimeError("beamd exited during startup")
@@ -59,7 +60,7 @@ class DaemonIntegration(unittest.TestCase):
 
     def test_mode_capability_and_invalid_mode(self):
         health = self.call({'id': 1, 'op': 'health'})
-        self.assertIn(health['prompt_version'], ('keys_llm_v1', 'keys_llm_v2'))
+        self.assertIn(health['prompt_version'], ('keys_llm_v1', 'keys_llm_v2', 'keys_llm_v3', 'keys_llm_v4'))
         self.assertIn('ime', health['modes'])
         for mode in ('invalid', None, 1):
             self.assertEqual(self.call({'id': 2, 'op': 'query', 'keys': 'nh', 'mode': mode})['error'], 'invalid_mode')
@@ -70,6 +71,10 @@ class DaemonIntegration(unittest.TestCase):
         else:
             self.assertTrue(reply['ok'])
             self.assertEqual(len(reply['candidates']), len(reply['comments']))
+            self.assertIn(reply['translation_status'], ('ready', 'need_more_input'))
+            if health['prompt_version'] == 'keys_llm_v4':
+                import re
+                self.assertFalse(any(re.search('[一-鿿]', text) for text in reply['candidates']))
         self.assertTrue(self.call({'id': 4, 'op': 'query', 'keys': 'nihao', 'beam_ms': 0})['candidates'])
 
     def test_learning_feedback_lifecycle(self):
@@ -139,7 +144,7 @@ sys.exit(75)
         base=command('status')['base_sha256']
         manifest=root/'component.json'
         manifest.write_text(json.dumps({'schemaVersion':2,'base_sha256':base,'tokenizer':'gguf-embedded',
-            'recipe':'beam-personal-r8-qvac-v1','prompt_version':'keys_llm_v1','backend':'vulkan',
+            'recipe':'beam-personal-r8-qvac-v1','prompt_version':self.call({'id':1,'op':'health'})['prompt_version'],'backend':'vulkan',
             'executable':str(script),'pinyin':str(script),'replay':str(script)}))
         command('install',manifest=str(manifest))
         command('disable')
@@ -247,11 +252,11 @@ with socket.socket(socket.AF_UNIX) as client:
                             for _ in range(200):
                                 if process.poll() is not None: self.fail('daemon exited during setup test')
                                 try:
-                                    status = call({'op':'health'})['learning']; break
+                                    health = call({'op':'health'}); status = health['learning']; break
                                 except OSError: time.sleep(.1)
                             else: self.fail('setup daemon startup timed out')
                             (root/'component.json').write_text(json.dumps({'schemaVersion':2,
-                                'base_sha256':status['base_sha256'], 'prompt_version':'keys_llm_v1', 'tokenizer':'gguf-embedded',
+                                'base_sha256':status['base_sha256'], 'prompt_version':health['prompt_version'], 'tokenizer':'gguf-embedded',
                                 'recipe':'beam-personal-r8-qvac-v1', 'backend':'vulkan',
                                 'executable':str(helper), 'replay':str(helper), 'pinyin':str(helper)}))
                             self.assertFalse(call({'op':'learning','action':'setup'})['ok'])

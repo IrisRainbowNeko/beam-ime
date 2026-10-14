@@ -59,6 +59,9 @@ class NativeTrainerTest(unittest.TestCase):
     def test_dual_task_replay_and_resume(self):
         self.check_resume('keys_llm_v2')
 
+    def test_fragment_waiting_replay_and_resume(self):
+        self.check_resume('keys_llm_v4')
+
     def check_resume(self, version):
         import gguf
         import numpy as np
@@ -70,8 +73,11 @@ class NativeTrainerTest(unittest.TestCase):
             pinyin = root / 'pinyin.tsv'; pinyin.write_text('星\txing\n好\thao\n', encoding='utf-8')
             replay = root / 'replay.json'
             rows = [{'keys': 'hao', 'target': '好', 'context': ''}] * 16
-            if version == 'keys_llm_v2':
+            if version in ('keys_llm_v2', 'keys_llm_v4'):
                 rows += [{'keys': 'hao', 'target': '好', 'translation': 'Good.', 'context': '', 'mode': 'translate_en'}] * 4
+            if version == 'keys_llm_v4':
+                rows += [{'keys': 'hao', 'target': '好', 'translation': '', 'translation_status': 'need_more_input',
+                          'context': '', 'mode': 'translate_en'}] * 4
             replay.write_text(json.dumps(rows), encoding='utf-8')
             component = {'schemaVersion': 2, 'recipe': 'beam-personal-r8-qvac-v1', 'prompt_version': version,
                          'backend': 'cpu', 'base_sha256': fingerprint, 'pinyin': str(pinyin), 'replay': str(replay)}
@@ -90,7 +96,7 @@ class NativeTrainerTest(unittest.TestCase):
                     self.assertEqual(result.returncode, 0, log.read_text(encoding='utf-8')[-6000:])
                 run(baseline)
                 snapshot = json.loads((baseline.parent / 'samples.json').read_text())
-                if version == 'keys_llm_v2':
+                if version in ('keys_llm_v2', 'keys_llm_v4'):
                     for start in range(0, len(snapshot['schedule']), 16):
                         selected = snapshot['schedule'][start:start + 16]
                         modes = [snapshot['samples'][entry['sample']]['mode'] for entry in selected]

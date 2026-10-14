@@ -76,6 +76,7 @@ std::filesystem::path learning_data_directory() {
 
 Pronunciations::Pronunciations(const std::filesystem::path & path) {
     std::ifstream stream(path);
+    if (!stream) throw std::runtime_error("cannot open Beam pronunciation table");
     if (!stream) throw std::runtime_error("cannot open Beam pronunciation table: " + path.u8string());
     std::string line, ch, reading;
     while (std::getline(stream, line)) {

@@ -14,7 +14,7 @@ import subprocess
 import sys
 import time
 
-from keys_llm_format import build_prompt, letters, normalize_keys, readings, units
+from keys_llm_format import DUAL_PROMPT_VERSIONS, build_prompt, build_target, letters, normalize_keys, readings, units
 
 RECIPE = 'beam-personal-r8-v1'
 TARGETS = ['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']
@@ -63,7 +63,8 @@ def encode(tokenizer, sample, version='keys_llm_v1'):
     mode = sample.get('mode', 'ime')
     prompt = build_prompt(sample['keys'], sample.get('context', '')[-64:], mode, version) + '结果：'
     prefix = tokenizer(prompt, add_special_tokens=False)['input_ids']
-    target = sample['translation'] + '\t' + sample['target'] if mode == 'translate_en' else sample['target']
+    target = build_target(sample['target'], mode=mode, translation=sample.get('translation', ''), version=version,
+                          translation_status=sample.get('translation_status', 'ready'))[len('结果：'):]
     suffix = tokenizer(target, add_special_tokens=False)['input_ids'] + [tokenizer.eos_token_id]
     return {'input_ids': prefix + suffix, 'labels': [-100] * len(prefix) + suffix}
 
@@ -136,6 +137,8 @@ def run_job(job_path):
     if not isinstance(replay_rows, list) or len(replay_rows) < 16:
         raise ValueError('The component must contain at least 16 generic replay examples.')
     replay_rows = replay_rows[:256]
+    if prompt_version != 'keys_llm_v4':
+        replay_rows = [r for r in replay_rows if r.get('translation_status') != 'need_more_input']
     if prompt_version == 'keys_llm_v1':
         replay_rows = [r for r in replay_rows if r.get('mode', 'ime') == 'ime']
     progress('collision_replay')
@@ -201,7 +204,7 @@ def run_job(job_path):
                 os.replace(temporary, path)
             encoded.append({**value, **teacher})
     references = generic + (anchors * max(1, round(len(generic) / len(anchors))) if anchors else [])
-    if prompt_version == 'keys_llm_v2':
+    if prompt_version in DUAL_PROMPT_VERSIONS:
         if not translations:
             raise ValueError('keys_llm_v2 replay requires translated examples')
         references = {'generic': generic, 'collision': anchors, 'translation': translations}

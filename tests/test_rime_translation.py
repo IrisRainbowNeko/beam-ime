@@ -33,7 +33,11 @@ class RimeTranslationTest(unittest.TestCase):
                         reply.update(mode=mode, candidates=['Hello.'] if mode == 'translate_en' else ['你好'],
                                      comments=['你好'] if mode == 'translate_en' else [''], sources=['model'])
                         if mode == 'translate_en' and owner.failure:
-                            if owner.failure == 'timeout':
+                            if owner.failure == 'waiting' and request['keys'] != 'nihao':
+                                reply.update(candidates=[], comments=[], sources=[], translation_status='need_more_input')
+                            elif owner.failure == 'waiting':
+                                reply['translation_status'] = 'ready'
+                            elif owner.failure == 'timeout':
                                 time.sleep(.5)
                             elif owner.failure == 'malformed':
                                 reply['comments'] = 5
@@ -111,6 +115,13 @@ beam:
         self.events.clear()
         output = self.drive('@beam_translate', 'nihao', '@beam_off', '{space}')
         self.assertIn('commit: 你好', output)
+
+    def test_wait_keeps_keys_until_a_translatable_fragment_is_ready(self):
+        self.failure = 'waiting'
+        output = self.drive('@beam_translate', 'ni', '{space}', 'hao', '{space}')
+        self.assertNotIn('commit: ni', output)
+        self.assertIn('commit: Hello.', output)
+        self.assertTrue(any(r.get('keys') == 'nihao' for r in self.events))
 
     def test_translation_errors_do_not_offer_chinese_candidates(self):
         for failure in ('unsupported_mode', 'timeout', 'malformed'):

@@ -19,7 +19,7 @@ def main():
     parser.add_argument('--model', type=Path, required=True)
     parser.add_argument('--pinyin', type=Path, required=True)
     parser.add_argument('--replay', type=Path, default=ROOT / 'src/trainer/replay.json')
-    parser.add_argument('--prompt-version', choices=('keys_llm_v1', 'keys_llm_v2'),
+    parser.add_argument('--prompt-version', choices=('keys_llm_v1', 'keys_llm_v2', 'keys_llm_v3', 'keys_llm_v4'),
                         default=json.loads((ROOT / 'models/default.json').read_text())['promptVersion'])
     parser.add_argument('--platform', choices=('linux-x86_64', 'windows-x86_64'), required=True)
     parser.add_argument('--release-url', required=True)
@@ -46,6 +46,10 @@ def main():
             replay = [row for row in replay if row.get('mode', 'ime') == 'ime']
         elif not any(row.get('mode') == 'translate_en' and row.get('translation') for row in replay):
             raise ValueError('keys_llm_v2 replay requires translated examples')
+        if args.prompt_version != 'keys_llm_v4':
+            replay = [row for row in replay if row.get('translation_status') != 'need_more_input']
+        elif not any(row.get('translation_status') == 'need_more_input' for row in replay):
+            raise ValueError('keys_llm_v4 replay requires waiting examples')
         (stage / 'replay.json').write_text(json.dumps(replay, ensure_ascii=False), encoding='utf-8')
         shutil.copytree(args.runtime / 'licenses', stage / 'licenses')
         shutil.copy2(ROOT / 'LICENSE', stage / 'licenses/Beam-Apache-2.0.txt')

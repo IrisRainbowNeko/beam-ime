@@ -13,7 +13,7 @@ from pathlib import Path
 import random
 import unicodedata
 
-from keys_llm_format import build_target, normalize_keys, units
+from keys_llm_format import FRAGMENT_VERSION, build_target, normalize_keys, units
 from personal_trainer import phonetic_segments
 
 
@@ -33,7 +33,7 @@ def split_rows(rows, seed=20261012, dev_fraction=.05, test_fraction=.05):
 
     # Repeated sentences connect sessions; neither may straddle a split.
     for row in rows:
-        text = 'text:' + sentence(row['target'])
+        text = 'text:' + sentence(row.get('parent_text', row['target']))
         find(text)
         if row.get('session_id'):
             session = 'session:' + str(row.get('source', '')) + ':' + str(row['session_id'])
@@ -41,9 +41,11 @@ def split_rows(rows, seed=20261012, dev_fraction=.05, test_fraction=.05):
             parents[b] = a
     result = {'train': [], 'dev': [], 'test': []}
     for row in rows:
-        group = find('text:' + sentence(row['target']))
+        group = find('text:' + sentence(row.get('parent_text', row['target'])))
         score = int(hashlib.sha256(f'{seed}:{group}'.encode()).hexdigest()[:16], 16) / 2**64
-        name = 'test' if score < test_fraction else 'dev' if score < test_fraction + dev_fraction else 'train'
+        name = row.get('split') or ('test' if score < test_fraction else 'dev' if score < test_fraction + dev_fraction else 'train')
+        if name not in result:
+            raise ValueError('invalid parent split')
         result[name].append(row)
     return result
 
@@ -68,17 +70,23 @@ def expand(row, seed=20261012):
     if original:
         spellings.insert(0, ('original', original))
     seen = set()
-    identifier = hashlib.sha256((str(row.get('source', '')) + ':' + row['target']).encode()).hexdigest()[:20]
+    identifier = hashlib.sha256((str(row.get('source', '')) + ':' + row.get('parent_id', '') + ':' +
+                                 row.get('context', '') + ':' + row['target']).encode()).hexdigest()[:20]
     for variant, keys in spellings:
         if keys in seen or len(keys.replace("'", '')) > 40:
             continue
         seen.add(keys)
         shared = {'id': identifier + ':' + variant, 'variant': variant, 'keys': keys,
                   'target': row['target'], 'context': row.get('context', '')[-64:]}
+        for field in ('parent_id', 'context_kind', 'focused'):
+            if field in row:
+                shared[field] = row[field]
         yield {**shared, 'mode': 'ime'}
-        if row.get('translation'):
-            build_target(row['target'], mode='translate_en', translation=row['translation'])
-            yield {**shared, 'mode': 'translate_en', 'translation': row['translation']}
+        if row.get('translation') or row.get('translation_status') == 'need_more_input':
+            status = row.get('translation_status', 'ready')
+            build_target(row['target'], mode='translate_en', translation=row.get('translation', ''),
+                         version=FRAGMENT_VERSION, translation_status=status)
+            yield {**shared, 'mode': 'translate_en', 'translation': row.get('translation', ''), 'translation_status': status}
 
 
 def main():
@@ -92,9 +100,16 @@ def main():
     if min(args.dev_fraction, args.test_fraction) < 0 or args.dev_fraction + args.test_fraction >= 1:
         parser.error('split fractions must be nonnegative and sum to less than one')
     rows = []
+    rejected = 0
     for path in args.input:
         with path.open(encoding='utf-8') as stream:
-            rows.extend(json.loads(line) for line in stream if line.strip())
+            for line in stream:
+                if line.strip():
+                    row = json.loads(line)
+                    if row.get('translation_error'):
+                        rejected += 1
+                    else:
+                        rows.append(row)
     args.output.mkdir(parents=True, exist_ok=True)
     counts = {}
     for name, members in split_rows(rows, args.seed, args.dev_fraction, args.test_fraction).items():
@@ -109,7 +124,7 @@ def main():
                     seen.add(key)
                     output.write(json.dumps(item, ensure_ascii=False) + '\n')
                     counts[name][item['mode']] += 1
-    print(json.dumps(counts, indent=2))
+    print(json.dumps({'splits': counts, 'teacher_errors_excluded': rejected}, indent=2))
 
 
 if __name__ == '__main__':

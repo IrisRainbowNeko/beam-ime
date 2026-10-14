@@ -150,6 +150,7 @@ int beamd_main(int argc, char ** argv) {
     beam::net::Listener listener;
     std::string error;
     if (!beam::net::listen_local(listener, error, socket_path)) { fprintf(stderr, "beamd: %s\n", error.c_str()); return 4; }
+    options.pinyin_path = (std::filesystem::u8path(data_directory) / "pinyin.tsv").u8string();
     beam::Engine engine(options);
     if (!engine.ok()) {
         fprintf(stderr, "beamd: failed to load %s\n", options.model_path.c_str());
@@ -272,6 +273,7 @@ int beamd_main(int argc, char ** argv) {
                         reply.update(learning.rank(keys, context, res.candidates, (size_t)q.max_candidates));
                         reply["comments"] = std::vector<std::string>(reply["candidates"].size());
                     } else {
+                        reply["translation_status"] = res.translation_status;
                         auto ranked = learning.rank(keys, context, res.comments, res.comments.size(), false);
                         json texts = json::array(), comments = json::array(), sources = json::array();
                         for (size_t i = 0; i < ranked["candidates"].size(); ++i) {

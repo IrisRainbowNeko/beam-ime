@@ -1,6 +1,6 @@
 # 模型工具
 
-v0.2.1 发布模型采用 `keys_llm_v1`。双模式开发使用 `keys_llm_v2`；任务开关需要配套训练后的模型。
+v0.2.1 发布模型采用 `keys_llm_v1`。当前片段改进实验使用 `keys_llm_v4`，v2/v3 用于既有双模式对照；任务开关需要配套训练后的模型。
 以下工具用于训练模型；开发机使用的 Python/PyTorch 不进入用户安装包。
 训练数据需采用 JSONL，每行包含 `keys`、`context`、`target`；直接输出模式不需要拼音切分。
 
@@ -94,7 +94,7 @@ A 从旧 IME 开始，英文在前；B 从旧 IME 开始，中文在前；C 从�
 验证损失单独记录英文与注释，两个 epoch 均做生成评测。
 
 中文先行实验标记为 `keys_llm_v3`，输入 prompt 与 v2 相同，输出为 `中文注释<TAB>英文`。
-这是模型实验格式；运行时和 QVAC 接入随胜出配方另行更新。
+运行时和 QVAC 现已支持 v3，以及增加等待状态的 v4。
 评测统一解析为英文正文和中文注释，分别记录中文命中、双字段结构、英文夹中文情况，以及 COMET/chrF++。
 COMET 的分数不表示正确率；`correct_comment` 是中文注释完全正确的条件子集，各模型的子集大小可能不同。
 
@@ -124,6 +124,60 @@ PYTHONPATH=/path/llama.cpp/gguf-py python tools/models/tie_embeddings.py \
 英文精确匹配不能代替语义评价，至少 500 条独立样例还需检查否定、遗漏和两字段一致性。
 中文 P@1/P@5 与旧模型同集比较，目标下降不超过 0.5 个百分点；延迟需使用量化后模型分别测 CPU/Vulkan。
 新 manifest 使用 `promptVersion: keys_llm_v2`、`modes: [ime, translate_en]` 及实际 GGUF 大小和 SHA-256。
+
+## 输入片段修复实验
+
+`fragment_corpus.py` 从公开会话生成 30,000 条训练片段，另留各 2,000 条验证和测试片段。
+长度桶按 1–2、3–4、5 字以上分配为 50/30/20；上下文中文、英文、混合、空为 50/25/15/10。
+原会话与完整发言先划分，再切片；片段使用此前已输入的文本。旧整句集保留原划分。
+教师返回 `translation_status`、英文片段和英文上下文；无效教师输出显式计数并从联合数据排除。
+可译短词正常输出；`need_more_input` 编码为 `中文<TAB><WAIT>`，不按长度强制等待。
+
+```sh
+python tools/models/fragment_corpus.py --lccc /path/lccc_base_train.jsonl.gz \
+  --base-corpus /path/ordinary.jsonl /path/paired.jsonl --output /path/fragment-corpus
+CUDA_VISIBLE_DEVICES=0 python -u tools/models/run_fragment_training.py \
+  --corpus /path/fragment-corpus --output /path/fragment-run \
+  --teacher /path/Qwen3-32B-teacher --ime /path/release-checkpoint \
+  --baseline /path/B/epoch-1 --scorer-python /path/comet-env/bin/python \
+  --comet-checkpoint /path/comet/checkpoints/model.ckpt --llama-source /path/llama.cpp
+```
+
+D0 固定 B 权重比较整段 beam、贪心优先、分字段评分。D1 与 D2 使用相同初始化、样本顺序、
+长度及上下文分桶、3:1 任务比例、batch256、学习率 5e-6、2 epoch。
+D1 使用原字段损失；D2 使用每样本字段均值：普通 CE .65、中文注释 CE .15、英文 CE .20，
+旧 IME 教师的普通 KL .325、中文注释 KL .075。注释 KL 只对齐中文内容的同 tokenizer token，
+排除跨 TAB 边界的 token、等待标记和 EOS。
+D3 从 D2 接着训练 200 步，学习率 1e-6；每步联合回放外加 40 对英文偏好，DPO β=.1、权重 .1。
+8,000 对训练集偏好由正确教师译文和实体、数字、否定、遗漏、增译、重复等受控错误构成，
+不将合成负例效果等同于真实翻译质量。
+
+结果目录保存 D0–D3 日志、候选、等待/误等待指标、语义评测样本和模型。
+中文还原指标包含格式有效的等待结果；等待结果不会被当作已展示的英文候选。
+P@1/P@5、等待召回和误等待率附请求级 Wilson 95% 区间，拼法变体存在相关性，不能当作独立原句数。
+`semantic-500.jsonl` 供独立语义检查；等待集不足 200 条时 `status.json` 记录实际数量，需补齐后比较目标。
+选型先比较中文保持，再比较同一公开验证子集的端到端可用率；D0 并列时选延迟较低的策略。
+Qwen3-32B 自动判定忠实度并分列实体、数字、否定、增译、漏译和重复错误，缺失候选计入失败。
+这些自动判定与人工检查分别记录，COMET 只作为辅助指标。私人输入回放保存在用户本机、仓库外。
+已完成的阶段可以通过 `--start-phase 阶段名` 接续，要求之前的输出已完整写入。
+胜出模型导出时使用 `tie_embeddings.py --prompt-version keys_llm_v4 --decoding-strategy 策略名`，
+QVAC 组件使用 `--prompt-version keys_llm_v4`；内置回放同时包含正常译英和等待样例。
+
+量化后的本机回放使用隔离 daemon，读取实际展示候选，同时记录请求、生成、搜索的 p50/p95 和峰值驻留内存：
+
+```sh
+python tools/models/keys_llm_eval.py --runtime build/release/bin/beamd \
+  --checkpoint /path/beam-fragments-q8.gguf --input /path/held-out.jsonl \
+  --output /path/cpu-replay.json --ngl 0 --threads 4 --beam-ms 2000
+python tools/models/keys_llm_eval.py --runtime build/release/bin/beamd \
+  --checkpoint /path/beam-fragments-q8.gguf --input /path/held-out.jsonl \
+  --output /path/vulkan-replay.json --ngl 99 --threads 4 --beam-ms 2000 \
+  --backend-dir build/release/bin
+```
+
+旧模型与新模型使用相同输入、线程数和搜索预算。完整搜索与实际交互预算分开跑，
+后者设置 `--beam-ms 150 --client-timeout-ms 400`；超过客户端等待上限的响应计为空候选和超时，
+不会作为可用结果抬高准确率。原生等待响应不带中文字段，等待时的中文还原由 checkpoint 评测记录。
 
 ## 个人 LoRA 训练组件
 
