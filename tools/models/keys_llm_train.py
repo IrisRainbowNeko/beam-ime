@@ -283,8 +283,20 @@ def dev_loss(model: Any, examples: list[dict], pad_id: int, device: torch.device
     return metrics
 
 
-def save(model: Any, tokenizer: Any, path: Path) -> None:
+def save(model: Any, tokenizer: Any, path: Path, lora_base: tuple[str, str, list[str]] | None = None) -> None:
     path.mkdir(parents=True, exist_ok=True)
+    if lora_base:
+        # Keep the adapter, and write the merged bf16 model so the evaluator and GGUF converter can load it.
+        from peft import PeftModel
+        from transformers import AutoModelForCausalLM
+        model.save_pretrained(path / 'adapter')
+        base_path, version, modes = lora_base
+        merged = PeftModel.from_pretrained(AutoModelForCausalLM.from_pretrained(base_path, torch_dtype=torch.bfloat16),
+                                           path / 'adapter').merge_and_unload()
+        merged.config.beam_prompt_version, merged.config.beam_modes = version, modes
+        merged.save_pretrained(path)
+        tokenizer.save_pretrained(path)
+        return
     state = {name: value.detach().to(torch.bfloat16) for name, value in model.state_dict().items()}
     model.save_pretrained(path, state_dict=state)
     tokenizer.save_pretrained(path)
@@ -353,6 +365,12 @@ def train(args: argparse.Namespace) -> None:
     model.config.beam_prompt_version = args.prompt_version
     dual_task = args.prompt_version in DUAL_PROMPT_VERSIONS
     model.config.beam_modes = list(MODES) if dual_task else ['ime']
+    if args.lora_rank:
+        from peft import LoraConfig, get_peft_model
+        model = get_peft_model(model, LoraConfig(
+            r=args.lora_rank, lora_alpha=2 * args.lora_rank, lora_dropout=0.0, task_type='CAUSAL_LM',
+            target_modules=['q_proj', 'k_proj', 'v_proj', 'o_proj', 'gate_proj', 'up_proj', 'down_proj']))
+        model.print_trainable_parameters()
     model.train()
     preferences, reference_model = [], None
     if getattr(args, 'preferences', None):
@@ -370,7 +388,7 @@ def train(args: argparse.Namespace) -> None:
                                                               attn_implementation='sdpa').to(device).eval()
         reference_model.requires_grad_(False)
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay, betas=(0.9, 0.95), fused=device.type == 'cuda',
+        [p for p in model.parameters() if p.requires_grad], lr=args.learning_rate, weight_decay=args.weight_decay, betas=(0.9, 0.95), fused=device.type == 'cuda',
     )
     make_batches = fragment_batches if getattr(args, 'fragment_sampling', False) else task_batches if dual_task else batches
     steps_per_epoch = len(make_batches(train_examples, args.batch_size, random.Random(args.seed)))
@@ -391,6 +409,7 @@ def train(args: argparse.Namespace) -> None:
         "teacherWeight": args.teacher_weight,
         "teacherPromptVersion": teacher_version,
         "lossScheme": args.loss_scheme,
+        "loraRank": args.lora_rank, "translateOnly": args.translate_only,
         'preferences': ({'path': args.preferences, 'sha256': sha256(Path(args.preferences)), 'pairs': len(preferences),
                          'beta': .1, 'weight': .1, 'batchSize': 40, 'reference': args.model} if preferences else None),
         "taskWeights": ({'ime': .65, 'english': .2, 'comment': .15, 'imeKL': .325, 'commentKL': .075}
@@ -418,6 +437,7 @@ def train(args: argparse.Namespace) -> None:
         "torch": torch.__version__,
     }
     (out / "run-config.json").write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n")
+    lora_base = (args.model, args.prompt_version, model.config.beam_modes) if args.lora_rank else None
     log = (out / "train-log.jsonl").open("a", encoding="utf-8")
     step, started = 0, time.time()
     history = []
@@ -429,6 +449,8 @@ def train(args: argparse.Namespace) -> None:
             loss_value = 0.0
             # Normalize each task independently; bilingual output length must not set the task mix.
             for mode in MODES:
+                if args.translate_only and mode == 'ime':
+                    continue
                 items = [row for row in batch_items if row['mode'] == mode]
                 target_tokens = sum(sum(label != -100 for label in item['labels'][1:]) for item in items)
                 weight = (.75 if mode == 'ime' else .25) if dual_task else 1.0
@@ -477,7 +499,7 @@ def train(args: argparse.Namespace) -> None:
             running += loss_value
             running_steps += 1
             if args.save_every and step % args.save_every == 0:
-                save(model, tokenizer, out / f"step-{step}")
+                save(model, tokenizer, out / f"step-{step}", lora_base)
             if step % args.log_every == 0:
                 record = {"step": step, "epoch": epoch, "loss": running / running_steps,
                           "lr": lr_at(step), "elapsed": round(time.time() - started, 1)}
@@ -491,7 +513,7 @@ def train(args: argparse.Namespace) -> None:
                 break
         dev = dev_loss(model, dev_examples, pad_id, device, args.micro_batch_size)
         checkpoint = out / f"epoch-{epoch + 1}"
-        save(model, tokenizer, checkpoint)
+        save(model, tokenizer, checkpoint, lora_base)
         history.append({"epoch": epoch + 1, "step": step, "devLoss": dev, "checkpoint": str(checkpoint)})
         print(json.dumps(history[-1]), flush=True)
         if step >= total_steps:
@@ -518,6 +540,8 @@ def main() -> None:
     parser.add_argument('--fragment-sampling', action='store_true')
     parser.add_argument('--preferences', help='8000 training-only English preference pairs for D3')
     parser.add_argument('--max-steps', type=int)
+    parser.add_argument('--lora-rank', type=int, default=0, help='train a LoRA adapter on a frozen base instead of all weights')
+    parser.add_argument('--translate-only', action='store_true', help='skip ordinary-input loss; used for the translation adapter')
     parser.add_argument("--epochs", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=256)
     parser.add_argument("--micro-batch-size", type=int, default=4)
