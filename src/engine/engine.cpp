@@ -1,7 +1,6 @@
 #include "engine.hpp"
 
 #include "keys.hpp"
-#include "lora_merge.hpp"
 #include "store.hpp"
 #include "llama.h"
 
@@ -54,11 +53,16 @@ struct Engine::Impl {
     std::string active_version = kPromptV1;     // format and scoring of the current mode
     std::string active_strategy = "beam";
     InputMode mode = InputMode::Ime;
-    llama_adapter_lora * translate_adapter = nullptr;  // English-translation mode on an IME-only base
-    std::unique_ptr<Q8LoraMerge> translate_merge;      // ... or folded into the weights instead
-    bool translate_ready = false;
-    int n_threads = 1;
-    std::string translate_strategy = "field";
+    // English for an IME-only model: a second context on the same weights carries the translation
+    // adapter and writes the English for the Chinese candidates the IME chose. The IME context
+    // never sees the adapter, so ordinary input stays unchanged.
+    static constexpr int kTranslateSeqs = 8;
+    llama_adapter_lora * translate_adapter = nullptr;
+    llama_context * tctx = nullptr;
+    llama_memory_t tmem = nullptr;
+    llama_batch tbatch = {};
+    std::vector<llama_token> tcached;      // seq 0 of tctx: the last translation prompt
+    llama_context_params cparams = {};
     bool greedy_finished = false;
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
@@ -104,7 +108,6 @@ struct Engine::Impl {
         } else ggml_backend_load_all();
         auto mp = llama_model_default_params();
         mp.n_gpu_layers = o.gpu_layers;
-        if (o.writable_weights) mp.load_mode = LLAMA_LOAD_MODE_NONE;  // read into writable memory, not a read-only mapping
         // --ngl 0 means no GPU at all: an empty device list keeps llama.cpp from creating GPU
         // buffers or offloading ops (a broken GPU driver must not take the CPU path down with it).
         static ggml_backend_dev_t no_devices[] = {nullptr};
@@ -155,7 +158,7 @@ struct Engine::Impl {
         if (backend == "cpu") cp.op_offload = false;
         int threads = o.threads > 0 ? o.threads : std::max(1u, std::thread::hardware_concurrency() / 2);
         cp.n_threads = cp.n_threads_batch = threads;
-        n_threads = threads;
+        cparams = cp;
         ctx = llama_init_from_model(model, cp);
         if (!ctx) return;
         vocab = llama_model_get_vocab(model);
@@ -174,9 +177,10 @@ struct Engine::Impl {
     }
 
     ~Impl() {
-        translate_merge.reset();  // before the model: it holds tensors of it
         llama_batch_free(batch);
+        llama_batch_free(tbatch);
         if (ctx) llama_free(ctx);
+        if (tctx) llama_free(tctx);
         if (adapter) llama_adapter_lora_free(adapter);
         if (translate_adapter) llama_adapter_lora_free(translate_adapter);
         if (model) llama_model_free(model);
@@ -230,31 +234,100 @@ struct Engine::Impl {
         return llama_decode(ctx, batch) == 0;
     }
 
-    // Translation runs on the translation adapter alone (or on weights it was folded into);
-    // ordinary input keeps the personal adapter.
     bool apply_adapters() {
-        llama_adapter_lora * active = mode == InputMode::TranslateEn && translate_ready ? translate_adapter : adapter;
         float scale = 1.0f;
-        return llama_set_adapters_lora(ctx, active ? &active : nullptr, active ? 1 : 0, active ? &scale : nullptr) == 0;
+        return llama_set_adapters_lora(ctx, adapter ? &adapter : nullptr, adapter ? 1 : 0, adapter ? &scale : nullptr) == 0;
     }
 
+    // Switches the task of a dual-mode model (one that translates by itself).
     bool select_mode(InputMode next) {
         if (mode == next) return true;
         reset_cache(); prompt_toks.clear(); first_logits.clear();
-        if (translate_merge) {
-            bool done = next == InputMode::TranslateEn ? translate_merge->apply() : translate_merge->restore();
-            if (!done) {
-                // A half-written merge is never served: put the base weights back, stay where we were.
-                if (!translate_merge->restore()) fprintf(stderr, "beamd: cannot restore the base weights\n");
-                return false;
-            }
-        }
         mode = next;
-        bool translated = next == InputMode::TranslateEn && translate_ready;
-        active_version = translated ? kPromptV4 : prompt_version;
-        active_strategy = translated ? translate_strategy : decoding_strategy;
-        return apply_adapters();
+        return true;
     }
+
+    bool decode_translate(int n) {
+        tbatch.n_tokens = n;
+        return llama_decode(tctx, tbatch) == 0;
+    }
+
+    void add_translate_token(int & n, llama_token token, int pos, int seq, bool logits) {
+        tbatch.token[n] = token;
+        tbatch.pos[n] = pos;
+        tbatch.n_seq_id[n] = 1;
+        tbatch.seq_id[n][0] = seq;
+        tbatch.logits[n] = logits;
+        ++n;
+    }
+
+    // English for each Chinese candidate, decoded side by side and greedily: seq 0 holds the
+    // shared prompt (reused across keystrokes), seq i + 1 continues it with "<Chinese i>\t".
+    // A sequence still running at the deadline gets no English.
+    bool translate(const std::string & keys, const std::string & context, const std::vector<std::string> & chinese,
+                   Clock::time_point deadline, std::vector<std::string> & english) {
+        english.assign(chinese.size(), "");
+        const int n = std::min((int) chinese.size(), kTranslateSeqs);
+        if (n == 0) return true;
+        std::string text = task_prompt(keys, context, InputMode::TranslateEn, kPromptV4);
+        auto prompt = tokenize(text);
+        const int np = (int) prompt.size();
+        const int max_new = 48;
+        std::vector<std::vector<llama_token>> tails(n);
+        int cells = np, queued = 0;
+        for (int i = 0; i < n; ++i) {
+            auto full = tokenize(text + chinese[i] + "\t");
+            // The prompt must tokenize the same alone and followed by the candidate to share its cells.
+            if ((int) full.size() <= np || !std::equal(prompt.begin(), prompt.end(), full.begin())) continue;
+            tails[i].assign(full.begin() + np, full.end());
+            cells += (int) tails[i].size() + max_new;
+            queued += (int) tails[i].size();
+        }
+        if (np == 0 || cells > (int) llama_n_ctx(tctx) || np > tbatch_capacity || queued > tbatch_capacity) return false;
+
+        for (int s = 1; s <= n; ++s) llama_memory_seq_rm(tmem, s, -1, -1);
+        int common = 0;
+        while (common < (int) tcached.size() && common < np && tcached[common] == prompt[common]) ++common;
+        llama_memory_seq_rm(tmem, 0, common, -1);
+        tcached.resize(common);
+        int count = 0;
+        for (int i = common; i < np; ++i) add_translate_token(count, prompt[i], i, 0, false);
+        if (count && !decode_translate(count)) { llama_memory_clear(tmem, true); tcached.clear(); return false; }
+        tcached = prompt;
+
+        std::vector<int> active, row;
+        count = 0;
+        for (int i = 0; i < n; ++i) {
+            if (tails[i].empty()) continue;
+            llama_memory_seq_cp(tmem, 0, i + 1, 0, np);
+            for (int k = 0; k < (int) tails[i].size(); ++k)
+                add_translate_token(count, tails[i][k], np + k, i + 1, k + 1 == (int) tails[i].size());
+            active.push_back(i);
+            row.push_back(count - 1);
+        }
+        bool ok = !active.empty() && decode_translate(count);
+        std::vector<std::vector<llama_token>> out(n);
+        for (int step = 0; ok && !active.empty() && step < max_new && Clock::now() < deadline; ++step) {
+            std::vector<int> next;
+            count = 0;
+            for (size_t a = 0; a < active.size(); ++a) {
+                int i = active[a];
+                llama_token token = argmax(llama_get_logits_ith(tctx, row[a]));
+                if (stops(token)) { english[i] = detok(out[i]); continue; }
+                out[i].push_back(token);
+                add_translate_token(count, token, np + (int) (tails[i].size() + out[i].size()) - 1, i + 1, true);
+                next.push_back(i);
+            }
+            active.swap(next);
+            row.clear();
+            for (int r = 0; r < count; ++r) row.push_back(r);
+            if (count && !decode_translate(count)) ok = false;
+        }
+        for (int s = 1; s <= n; ++s) llama_memory_seq_rm(tmem, s, -1, -1);
+        if (!ok) { llama_memory_clear(tmem, true); tcached.clear(); }
+        return ok;
+    }
+    int tbatch_capacity = 512;
 
     void reset_cache() {
         llama_memory_clear(mem, true);
@@ -424,15 +497,12 @@ const std::string & Engine::model_name() const { return impl_->name; }
 const std::string & Engine::backend_name() const { return impl_->backend; }
 const std::string & Engine::prompt_version() const { return impl_->prompt_version; }
 bool Engine::supports(InputMode mode) const {
-    return mode == InputMode::Ime || dual_prompt(impl_->prompt_version) || impl_->translate_ready;
+    return mode == InputMode::Ime || dual_prompt(impl_->prompt_version) || impl_->translate_adapter != nullptr;
 }
-bool Engine::translate_merged() const { return impl_->translate_merge && impl_->translate_merge->merged(); }
 
 bool Engine::set_translate_adapter(const std::string & path, std::string & error) {
     auto & m = *impl_;
     if (dual_prompt(m.prompt_version)) { error = "model_already_translates"; return false; }
-    // The mode is chosen per query, so leaving it here costs nothing; it takes a previous merge out.
-    if (m.mode == InputMode::TranslateEn && !m.select_mode(InputMode::Ime)) { error = "translate_adapter_apply_failed"; return false; }
     auto * next = llama_adapter_lora_init(m.model, path.c_str());
     if (!next) { error = "translate_adapter_load_failed"; return false; }
     char value[64];
@@ -440,37 +510,34 @@ bool Engine::set_translate_adapter(const std::string & path, std::string & error
     if (length <= 0 || length >= (int) sizeof(value) || std::string(value, length) != kPromptV4) {
         llama_adapter_lora_free(next); error = "translate_adapter_prompt_unsupported"; return false;
     }
-    std::string strategy = "field";
-    length = llama_adapter_meta_val_str(next, "beam.decoding_strategy", value, sizeof(value));
-    if (length >= (int) sizeof(value)) { llama_adapter_lora_free(next); error = "translate_adapter_strategy_unsupported"; return false; }
-    if (length > 0) strategy.assign(value, length);
-    if (strategy != "beam" && strategy != "greedy_first" && strategy != "field") {
-        llama_adapter_lora_free(next); error = "translate_adapter_strategy_unsupported"; return false;
+    if (!m.tctx) {
+        auto cp = m.cparams;
+        cp.n_ctx = 1024;
+        cp.n_seq_max = 1 + Impl::kTranslateSeqs;
+        m.tctx = llama_init_from_model(m.model, cp);
+        if (!m.tctx) { llama_adapter_lora_free(next); error = "translate_context_failed"; return false; }
+        m.tmem = llama_get_memory(m.tctx);
+        m.tbatch = llama_batch_init(m.tbatch_capacity, 0, 1);
     }
-    if (!m.pronunciation) {
-        try { m.pronunciation = std::make_unique<Pronunciations>(std::filesystem::u8path(m.options.pinyin_path)); }
-        catch (const std::exception &) { llama_adapter_lora_free(next); error = "pinyin_data_unavailable"; return false; }
+    float scale = 1.0f;
+    if (llama_set_adapters_lora(m.tctx, &next, 1, &scale) != 0) {
+        llama_set_adapters_lora(m.tctx, m.translate_adapter ? &m.translate_adapter : nullptr, m.translate_adapter ? 1 : 0,
+                                m.translate_adapter ? &scale : nullptr);
+        llama_adapter_lora_free(next); error = "translate_adapter_apply_failed"; return false;
     }
-    std::unique_ptr<Q8LoraMerge> merge;
-    if (m.options.writable_weights) {
-        std::string reason;
-        merge = Q8LoraMerge::open(m.model, m.options.model_path, path, m.n_threads, reason);
-        if (!merge) fprintf(stderr, "beamd: translate adapter stays unmerged (%s)\n", reason.c_str());
+    if (m.translate_adapter) llama_adapter_lora_free(m.translate_adapter);
+    m.translate_adapter = next;
+    llama_memory_clear(m.tmem, true);
+    m.tcached.clear();
+    // Warm up the batch sizes of a translation so the first one is not slow.
+    for (int n : {1, 8, 64}) {
+        int count = 0;
+        auto seed = m.tokenize("按");
+        if (seed.empty()) break;
+        for (int i = 0; i < n; ++i) m.add_translate_token(count, seed[0], i, 0, i + 1 == n);
+        m.decode_translate(count);
+        llama_memory_clear(m.tmem, true);
     }
-    m.translate_merge = std::move(merge);  // the previous merge, if any, is already out of the weights
-    auto * previous = m.translate_adapter;
-    m.translate_adapter = m.translate_merge ? nullptr : next;
-    if (m.translate_merge) llama_adapter_lora_free(next);  // validation only: the weights carry it
-    m.translate_ready = true;
-    m.translate_strategy = strategy;
-    m.reset_cache(); m.prompt_toks.clear(); m.first_logits.clear();
-    if (m.mode == InputMode::TranslateEn) { m.active_version = kPromptV4; m.active_strategy = strategy; }
-    if (!m.apply_adapters()) {
-        m.translate_adapter = previous;
-        if (!m.translate_merge) llama_adapter_lora_free(next);
-        error = "translate_adapter_apply_failed"; return false;
-    }
-    if (previous) llama_adapter_lora_free(previous);
     return true;
 }
 
@@ -498,6 +565,32 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
     std::string keys = normalize_keys(raw_keys);
     if (keys.empty() || !ok()) return result;
     std::string c = utf8_tail(context, (size_t) m.options.context_chars);
+    if (options.mode == InputMode::TranslateEn && m.translate_adapter) {
+        // The IME picks the Chinese (with the personal adapter), the adapter writes its English.
+        QueryOptions ime = options;
+        ime.mode = InputMode::Ime;
+        ime.max_candidates = std::min(Impl::kTranslateSeqs, options.max_candidates + 2);
+        QueryResult chinese = query(raw_keys, context, ime);
+        result.greedy_ms = chinese.greedy_ms;
+        result.beam_ms = chinese.beam_ms;
+        result.beam_complete = chinese.beam_complete;
+        auto t0 = Clock::now();
+        std::vector<std::string> english;
+        if (!m.translate(keys, c, chinese.candidates, t0 + std::chrono::milliseconds(options.translate_budget_ms), english))
+            return result;
+        result.translate_ms = ms_since(t0);
+        std::vector<std::string> seen;
+        for (size_t i = 0; i < chinese.candidates.size() && (int) result.candidates.size() < options.max_candidates; ++i) {
+            auto parsed = parse_candidate(chinese.candidates[i] + "\t" + english[i], keys, InputMode::TranslateEn, kPromptV4);
+            if (english[i].empty() || !parsed || parsed->need_more_input) continue;
+            auto key = translation_key(parsed->text);
+            if (std::find(seen.begin(), seen.end(), key) != seen.end()) continue;
+            seen.push_back(key);
+            result.candidates.push_back(parsed->text);
+            result.comments.push_back(parsed->comment);
+        }
+        return result;
+    }
     if (!m.select_mode(options.mode)) return result;
     std::string prompt = task_prompt(keys, c, options.mode, m.active_version);
     int max_new = output_budget(options.mode, letter_count(keys));
