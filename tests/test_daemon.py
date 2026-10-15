@@ -13,6 +13,8 @@ import unittest
 
 @unittest.skipUnless(os.environ.get("BEAM_TEST_MODEL") and os.name == "posix", "set BEAM_TEST_MODEL for real model tests")
 class DaemonIntegration(unittest.TestCase):
+    extra_args = []
+
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
@@ -20,7 +22,8 @@ class DaemonIntegration(unittest.TestCase):
         cls.process = subprocess.Popen([os.environ.get("BEAM_TEST_BINARY", "build/release/bin/beamd"),
             "--socket", cls.endpoint, "--learning-dir", str(Path(cls.temp.name)/'learning'),
             "--model", os.environ["BEAM_TEST_MODEL"], "--ngl", os.environ.get("BEAM_TEST_NGL", "0"),
-            *(['--backend-dir', os.environ['BEAM_TEST_BACKEND_DIR']] if os.environ.get('BEAM_TEST_BACKEND_DIR') else [])],
+            *(['--backend-dir', os.environ['BEAM_TEST_BACKEND_DIR']] if os.environ.get('BEAM_TEST_BACKEND_DIR') else []),
+            *cls.extra_args],
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         for attempt in range(200):
             if cls.process.poll() is not None: raise RuntimeError("beamd exited during startup")
@@ -396,3 +399,30 @@ class AdapterLifecycle(unittest.TestCase):
                     print(f"adapter backend={health['backend']} baseline_p95_ms={baseline:.1f} adapted_p95_ms={adapted:.1f}")
                 finally:
                     if process and process.poll() is None: stop()
+
+
+@unittest.skipUnless(os.environ.get('BEAM_TEST_TRANSLATE_ADAPTER') and os.environ.get('BEAM_TEST_MODEL')
+                     and os.name == 'posix', 'set BEAM_TEST_MODEL (IME-only) and BEAM_TEST_TRANSLATE_ADAPTER')
+class TranslateAdapterIntegration(DaemonIntegration):
+    extra_args = ['--translate-adapter', os.environ.get('BEAM_TEST_TRANSLATE_ADAPTER', ''),
+                  '--data-dir', os.environ.get('BEAM_TEST_DATA_DIR', '/usr/share/beam-ime')]
+
+    def test_mode_capability_and_invalid_mode(self):
+        health = self.call({'id': 1, 'op': 'health'})
+        self.assertEqual(health['prompt_version'], 'keys_llm_v1')
+        self.assertEqual(health['modes'], ['ime', 'translate_en'])
+
+    def test_translation_mode_and_unchanged_ime(self):
+        import re
+        ime = lambda keys, context='': self.call({'id': 5, 'op': 'query', 'keys': keys, 'context': context,
+                                                  'mode': 'ime', 'beam_ms': 0})
+        before = [ime(keys)['candidates'] for keys in ('mingtianjian', 'wmqcfb')]
+        reply = self.call({'id': 6, 'op': 'query', 'keys': 'mingtianjian', 'mode': 'translate_en', 'beam_ms': 0})
+        self.assertTrue(reply['ok'])
+        self.assertEqual(reply['translation_status'], 'ready')
+        self.assertTrue(reply['candidates'])
+        self.assertEqual(len(reply['candidates']), len(reply['comments']))
+        self.assertTrue(all(re.search('[一-鿿]', comment) for comment in reply['comments']))
+        self.assertFalse(any(re.search('[一-鿿]', text) for text in reply['candidates']))
+        self.assertEqual(before, [ime(keys)['candidates'] for keys in ('mingtianjian', 'wmqcfb')])
+

@@ -38,9 +38,13 @@ struct Engine::Impl {
     EngineOptions options;
     std::string name;
     std::string backend = "cpu";
-    std::string prompt_version = kPromptV1;
+    std::string prompt_version = kPromptV1;     // the base model's task format
     std::string decoding_strategy = "beam";
+    std::string active_version = kPromptV1;     // format and scoring of the current mode
+    std::string active_strategy = "beam";
     InputMode mode = InputMode::Ime;
+    llama_adapter_lora * translate_adapter = nullptr;  // English-translation mode on an IME-only base
+    std::string translate_strategy = "field";
     bool greedy_finished = false;
     llama_model * model = nullptr;
     llama_context * ctx = nullptr;
@@ -116,6 +120,8 @@ struct Engine::Impl {
         if (length > 0) decoding_strategy.assign(version, length);
         if (decoding_strategy != "beam" && decoding_strategy != "greedy_first" && decoding_strategy != "field")
             { llama_model_free(model); model = nullptr; throw std::runtime_error("unsupported decoding strategy"); }
+        active_version = prompt_version;
+        active_strategy = decoding_strategy;
         if (mp.n_gpu_layers > 0) {
             auto device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
             if (!device) device = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_IGPU);
@@ -155,6 +161,7 @@ struct Engine::Impl {
         llama_batch_free(batch);
         if (ctx) llama_free(ctx);
         if (adapter) llama_adapter_lora_free(adapter);
+        if (translate_adapter) llama_adapter_lora_free(translate_adapter);
         if (model) llama_model_free(model);
     }
 
@@ -204,6 +211,23 @@ struct Engine::Impl {
             batch.logits[j] = i >= logits_from;
         }
         return llama_decode(ctx, batch) == 0;
+    }
+
+    // Translation runs on the translation adapter alone; ordinary input keeps the personal adapter.
+    bool apply_adapters() {
+        llama_adapter_lora * active = mode == InputMode::TranslateEn && translate_adapter ? translate_adapter : adapter;
+        float scale = 1.0f;
+        return llama_set_adapters_lora(ctx, active ? &active : nullptr, active ? 1 : 0, active ? &scale : nullptr) == 0;
+    }
+
+    bool select_mode(InputMode next) {
+        if (mode == next) return true;
+        reset_cache(); prompt_toks.clear(); first_logits.clear();
+        mode = next;
+        bool translated = next == InputMode::TranslateEn && translate_adapter;
+        active_version = translated ? kPromptV4 : prompt_version;
+        active_strategy = translated ? translate_strategy : decoding_strategy;
+        return apply_adapters();
     }
 
     void reset_cache() {
@@ -310,10 +334,10 @@ struct Engine::Impl {
                 if (stops(c.tok)) {
                     if (!t.empty()) {
                         float score = c.score / (float) (t.size() + 1);
-                        if (mode == InputMode::TranslateEn && decoding_strategy == "field") {
+                        if (mode == InputMode::TranslateEn && active_strategy == "field") {
                             std::vector<std::string> pieces;
                             for (auto token : t) pieces.push_back(piece(token));
-                            score = bilingual_score(beams[c.parent].probabilities, pieces, prompt_version);
+                            score = bilingual_score(beams[c.parent].probabilities, pieces, active_version);
                         }
                         finished.push_back({score, t});
                     }
@@ -373,20 +397,56 @@ bool Engine::ok() const { return impl_->ctx != nullptr; }
 const std::string & Engine::model_name() const { return impl_->name; }
 const std::string & Engine::backend_name() const { return impl_->backend; }
 const std::string & Engine::prompt_version() const { return impl_->prompt_version; }
-bool Engine::supports(InputMode mode) const { return mode == InputMode::Ime || dual_prompt(impl_->prompt_version); }
+bool Engine::supports(InputMode mode) const {
+    return mode == InputMode::Ime || dual_prompt(impl_->prompt_version) || impl_->translate_adapter != nullptr;
+}
+
+bool Engine::set_translate_adapter(const std::string & path, std::string & error) {
+    auto & m = *impl_;
+    if (dual_prompt(m.prompt_version)) { error = "model_already_translates"; return false; }
+    auto * next = llama_adapter_lora_init(m.model, path.c_str());
+    if (!next) { error = "translate_adapter_load_failed"; return false; }
+    char value[64];
+    int length = llama_adapter_meta_val_str(next, "beam.prompt_version", value, sizeof(value));
+    if (length <= 0 || length >= (int) sizeof(value) || std::string(value, length) != kPromptV4) {
+        llama_adapter_lora_free(next); error = "translate_adapter_prompt_unsupported"; return false;
+    }
+    std::string strategy = "field";
+    length = llama_adapter_meta_val_str(next, "beam.decoding_strategy", value, sizeof(value));
+    if (length >= (int) sizeof(value)) { llama_adapter_lora_free(next); error = "translate_adapter_strategy_unsupported"; return false; }
+    if (length > 0) strategy.assign(value, length);
+    if (strategy != "beam" && strategy != "greedy_first" && strategy != "field") {
+        llama_adapter_lora_free(next); error = "translate_adapter_strategy_unsupported"; return false;
+    }
+    if (!m.pronunciation) {
+        try { m.pronunciation = std::make_unique<Pronunciations>(std::filesystem::u8path(m.options.pinyin_path)); }
+        catch (const std::exception &) { llama_adapter_lora_free(next); error = "pinyin_data_unavailable"; return false; }
+    }
+    auto * previous = m.translate_adapter;
+    m.translate_adapter = next;
+    m.translate_strategy = strategy;
+    m.reset_cache(); m.prompt_toks.clear(); m.first_logits.clear();
+    if (m.mode == InputMode::TranslateEn) { m.active_version = kPromptV4; m.active_strategy = strategy; }
+    if (!m.apply_adapters()) {
+        m.translate_adapter = previous;
+        llama_adapter_lora_free(next); error = "translate_adapter_apply_failed"; return false;
+    }
+    if (previous) llama_adapter_lora_free(previous);
+    return true;
+}
 
 bool Engine::set_adapter(const std::string & path, std::string & error) {
     auto & m = *impl_;
     auto * next = path.empty() ? nullptr : llama_adapter_lora_init(m.model, path.c_str());
     if (!path.empty() && !next) { error = "adapter_load_failed"; return false; }
-    float scale = 1.0f;
-    if (llama_set_adapters_lora(m.ctx, next ? &next : nullptr, next ? 1 : 0, next ? &scale : nullptr) != 0) {
+    auto * previous = m.adapter;
+    m.adapter = next;
+    if (!m.apply_adapters()) {
+        m.adapter = previous;
         if (next) llama_adapter_lora_free(next);
         error = "adapter_apply_failed";
         return false;
     }
-    auto * previous = m.adapter;
-    m.adapter = next;
     m.reset_cache();
     m.prompt_toks.clear(); m.first_logits.clear();
     if (previous) llama_adapter_lora_free(previous);
@@ -399,8 +459,8 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
     std::string keys = normalize_keys(raw_keys);
     if (keys.empty() || !ok()) return result;
     std::string c = utf8_tail(context, (size_t) m.options.context_chars);
-    if (m.mode != options.mode) { m.reset_cache(); m.prompt_toks.clear(); m.first_logits.clear(); m.mode = options.mode; }
-    std::string prompt = task_prompt(keys, c, options.mode, m.prompt_version);
+    if (!m.select_mode(options.mode)) return result;
+    std::string prompt = task_prompt(keys, c, options.mode, m.active_version);
     int max_new = output_budget(options.mode, letter_count(keys));
 
     auto t0 = Clock::now();
@@ -408,7 +468,7 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
     result.greedy_ms = ms_since(t0);
     std::string top = m.detok(m.greedy_out);
     auto parse = [&](const std::string & text) {
-        auto parsed = parse_candidate(text, keys, options.mode, m.prompt_version);
+        auto parsed = parse_candidate(text, keys, options.mode, m.active_version);
         if (parsed && options.mode == InputMode::TranslateEn && m.pronunciation && m.pronunciation->align(parsed->comment, keys).empty())
             return std::optional<TaskCandidate>{};
         return parsed;
@@ -436,7 +496,7 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
     }
     auto parsed_top = !m.greedy_finished ? std::nullopt : parse(top);
     auto top_id = parsed_top ? (options.mode == InputMode::Ime ? fold_case(parsed_top->text) : parsed_top->text) : "";
-    if (parsed_top && options.mode == InputMode::TranslateEn && m.decoding_strategy == "greedy_first") {
+    if (parsed_top && options.mode == InputMode::TranslateEn && m.active_strategy == "greedy_first") {
         ranked.erase(std::remove_if(ranked.begin(), ranked.end(), [&](const std::string & text) {
             return parse(text)->text == parsed_top->text;
         }), ranked.end());

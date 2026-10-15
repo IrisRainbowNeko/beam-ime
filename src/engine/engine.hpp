@@ -48,6 +48,9 @@ class Engine {
     const std::string & prompt_version() const;
     bool supports(InputMode mode) const;
     bool set_adapter(const std::string & path, std::string & error);
+    // English translation for an IME-only model: a LoRA adapter whose GGUF metadata names its
+    // prompt format. It is active only in translate_en mode; ordinary input never sees it.
+    bool set_translate_adapter(const std::string & path, std::string & error);
     // keys: raw input letters ("nhsj", "ni'hao"); context: text the user typed before, any length.
     QueryResult query(const std::string & keys, const std::string & context, const QueryOptions & options);
 

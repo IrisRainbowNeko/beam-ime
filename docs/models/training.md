@@ -258,3 +258,22 @@ BEAM_TEST_LEARNING_BENCH=1 build/release/bin/beam_learning_tests build/release/d
 第一项验证 CE/KL 的数值梯度、梯度裁剪、累积重置，以及随机小型 Qwen3 的连续训练和 microbatch 续训一致性。
 普通 CI 只使用 NumPy 生成微型 GGUF，不下载完整模型，也不安装 PyTorch。
 第二项单独验证真实 Q8 adapter 的加载、组词屏障、禁用、回退、失败保留以及更换基座。
+
+## 译英 LoRA（D5 路线）
+
+联合微调会让普通输入下降（真实记录约 2.6 个百分点），所以译英用独立的 LoRA：基座保持原 IME，`--translate-only`
+只训练译英样本，普通输入不加载 adapter，结果与原模型逐位一致。训练使用不含 `need_more_input` 的数据：
+
+```sh
+python tools/models/keys_llm_train.py --model /path/ime-checkpoint --prompt-version keys_llm_v4 \
+  --loss-scheme sample_field --fragment-sampling --wait-share 0 --translate-only --lora-rank 32 --teacher-weight 0 \
+  --train train-nowait.jsonl --dev dev-nowait.jsonl --output run --epochs 2 --batch-size 256 \
+  --micro-batch-size 8 --learning-rate 2e-4 --max-length 512
+PYTHONPATH=/path/llama.cpp/gguf-py python tools/models/export_translate_adapter.py \
+  --llama-source /path/llama.cpp --base /path/ime-checkpoint --adapter run/epoch-2/adapter \
+  --output beam-translate.gguf
+```
+
+`beamd --translate-adapter beam-translate.gguf`，或把文件命名为 `beam-translate.gguf` 放在模型旁，即可启用
+`translate_en`。adapter 的 GGUF 元数据记录 `beam.prompt_version=keys_llm_v4` 和解码策略；基座已经是双模式模型时拒绝加载。
+译英模式只使用译英 adapter，个人 LoRA 仍只作用于普通输入；切换模式会清空 KV 并重新应用 adapter。
