@@ -426,3 +426,18 @@ class TranslateAdapterIntegration(DaemonIntegration):
         self.assertFalse(any(re.search('[一-鿿]', text) for text in reply['candidates']))
         self.assertEqual(before, [ime(keys)['candidates'] for keys in ('mingtianjian', 'wmqcfb')])
 
+    def test_mode_round_trips_restore_ordinary_input_exactly(self):
+        ime = lambda: self.call({'id': 7, 'op': 'query', 'keys': 'nihaoshijie', 'mode': 'ime', 'beam_ms': 2000})['candidates']
+        translate = lambda: self.call({'id': 8, 'op': 'query', 'keys': 'nihaoshijie', 'mode': 'translate_en', 'beam_ms': 2000})['candidates']
+        # Every query follows a mode switch, so each starts from an empty KV cache and is repeatable
+        # (a reused cache can reorder near-ties on a GPU).
+        before, first = ime(), translate()
+        for _ in range(4):
+            self.assertEqual(ime(), before)
+            self.assertEqual(translate(), first)
+
+
+class TranslateAdapterUnmergedIntegration(TranslateAdapterIntegration):
+    # The same behaviour with the adapter kept as a separate LoRA instead of folded into the weights.
+    extra_args = TranslateAdapterIntegration.extra_args + ['--translate-merge', 'off']
+

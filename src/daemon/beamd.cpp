@@ -67,7 +67,7 @@ volatile std::sig_atomic_t stopping = 0;
 
 void usage() {
     fprintf(stderr,
-            "usage: beamd --model MODEL.gguf [--translate-adapter ADAPTER.gguf] [--socket PATH] [--ngl 99]\n"
+            "usage: beamd --model MODEL.gguf [--translate-adapter ADAPTER.gguf] [--translate-merge on|off] [--socket PATH] [--ngl 99]\n"
             "             [--threads N] [--beam-ms 150]\n"
             "             [--log FILE] [--verbose] [--debug-text]%s\n",
 #ifdef _WIN32
@@ -94,6 +94,7 @@ bool redirect_log(const std::string & path) {
 int beamd_main(int argc, char ** argv) {
     beam::EngineOptions options;
     std::string socket_path, log_path, learning_directory, data_directory, translate_adapter;
+    bool merge_translate = true;
     int beam_ms = 150;
     bool verbose = false, debug_text = false;
     for (int i = 1; i < argc; ++i) {
@@ -105,6 +106,11 @@ int beamd_main(int argc, char ** argv) {
         if (a == "--model") options.model_path = value();
         else if (a == "--version") { printf("%s\n", BEAM_VERSION); return 0; }
         else if (a == "--translate-adapter") translate_adapter = value();
+        else if (a == "--translate-merge") {
+            auto choice = value();
+            if (choice != "on" && choice != "off") { usage(); return 2; }
+            merge_translate = choice == "on";
+        }
         else if (a == "--backend-dir") options.backend_dir = value();
         else if (a == "--socket") socket_path = value();
         else if (a == "--learning-dir") learning_directory = value();
@@ -153,17 +159,18 @@ int beamd_main(int argc, char ** argv) {
     std::string error;
     if (!beam::net::listen_local(listener, error, socket_path)) { fprintf(stderr, "beamd: %s\n", error.c_str()); return 4; }
     options.pinyin_path = (std::filesystem::u8path(data_directory) / "pinyin.tsv").u8string();
-    beam::Engine engine(options);
-    if (!engine.ok()) {
-        fprintf(stderr, "beamd: failed to load %s\n", options.model_path.c_str());
-        beam::net::remove_endpoint(listener);
-        return 1;
-    }
     if (translate_adapter.empty()) {
         // An adapter shipped beside the model is picked up without a flag.
         auto beside = std::filesystem::u8path(options.model_path).parent_path() / "beam-translate.gguf";
         std::error_code exists_error;
         if (std::filesystem::is_regular_file(beside, exists_error)) translate_adapter = beside.u8string();
+    }
+    options.writable_weights = merge_translate && !translate_adapter.empty();
+    beam::Engine engine(options);
+    if (!engine.ok()) {
+        fprintf(stderr, "beamd: failed to load %s\n", options.model_path.c_str());
+        beam::net::remove_endpoint(listener);
+        return 1;
     }
     if (!translate_adapter.empty() && !engine.set_translate_adapter(translate_adapter, error)) {
         fprintf(stderr, "beamd: %s: %s\n", error.c_str(), translate_adapter.c_str());

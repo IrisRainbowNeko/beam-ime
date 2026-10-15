@@ -182,6 +182,8 @@ def evaluate_runtime(args):
                    '--learning-dir', str(Path(temporary) / 'learning'), '--ngl', str(args.ngl), '--threads', str(args.threads)]
         if args.backend_dir:
             command += ['--backend-dir', args.backend_dir]
+        if args.translate_adapter:
+            command += ['--translate-adapter', args.translate_adapter]
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT)
         try:
             deadline = time.monotonic() + 60
@@ -421,6 +423,7 @@ def main() -> None:
     parser.add_argument('--gpu-memory-fraction', type=float)
     parser.add_argument('--decoding', choices=('beam', 'greedy_first', 'field'), default='beam')
     parser.add_argument('--runtime', help='beamd executable for isolated native GGUF replay on this machine')
+    parser.add_argument('--translate-adapter', help='translate LoRA GGUF passed to beamd in --runtime replay')
     parser.add_argument('--ngl', type=int, default=0)
     parser.add_argument('--backend-dir')
     parser.add_argument('--threads', type=int, default=4)

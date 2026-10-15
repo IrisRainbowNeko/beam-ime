@@ -1,6 +1,7 @@
 #include "engine.hpp"
 
 #include "keys.hpp"
+#include "lora_merge.hpp"
 #include "store.hpp"
 #include "llama.h"
 
@@ -54,6 +55,9 @@ struct Engine::Impl {
     std::string active_strategy = "beam";
     InputMode mode = InputMode::Ime;
     llama_adapter_lora * translate_adapter = nullptr;  // English-translation mode on an IME-only base
+    std::unique_ptr<Q8LoraMerge> translate_merge;      // ... or folded into the weights instead
+    bool translate_ready = false;
+    int n_threads = 1;
     std::string translate_strategy = "field";
     bool greedy_finished = false;
     llama_model * model = nullptr;
@@ -100,6 +104,7 @@ struct Engine::Impl {
         } else ggml_backend_load_all();
         auto mp = llama_model_default_params();
         mp.n_gpu_layers = o.gpu_layers;
+        if (o.writable_weights) mp.load_mode = LLAMA_LOAD_MODE_NONE;  // read into writable memory, not a read-only mapping
         // --ngl 0 means no GPU at all: an empty device list keeps llama.cpp from creating GPU
         // buffers or offloading ops (a broken GPU driver must not take the CPU path down with it).
         static ggml_backend_dev_t no_devices[] = {nullptr};
@@ -150,6 +155,7 @@ struct Engine::Impl {
         if (backend == "cpu") cp.op_offload = false;
         int threads = o.threads > 0 ? o.threads : std::max(1u, std::thread::hardware_concurrency() / 2);
         cp.n_threads = cp.n_threads_batch = threads;
+        n_threads = threads;
         ctx = llama_init_from_model(model, cp);
         if (!ctx) return;
         vocab = llama_model_get_vocab(model);
@@ -168,6 +174,7 @@ struct Engine::Impl {
     }
 
     ~Impl() {
+        translate_merge.reset();  // before the model: it holds tensors of it
         llama_batch_free(batch);
         if (ctx) llama_free(ctx);
         if (adapter) llama_adapter_lora_free(adapter);
@@ -223,9 +230,10 @@ struct Engine::Impl {
         return llama_decode(ctx, batch) == 0;
     }
 
-    // Translation runs on the translation adapter alone; ordinary input keeps the personal adapter.
+    // Translation runs on the translation adapter alone (or on weights it was folded into);
+    // ordinary input keeps the personal adapter.
     bool apply_adapters() {
-        llama_adapter_lora * active = mode == InputMode::TranslateEn && translate_adapter ? translate_adapter : adapter;
+        llama_adapter_lora * active = mode == InputMode::TranslateEn && translate_ready ? translate_adapter : adapter;
         float scale = 1.0f;
         return llama_set_adapters_lora(ctx, active ? &active : nullptr, active ? 1 : 0, active ? &scale : nullptr) == 0;
     }
@@ -233,8 +241,16 @@ struct Engine::Impl {
     bool select_mode(InputMode next) {
         if (mode == next) return true;
         reset_cache(); prompt_toks.clear(); first_logits.clear();
+        if (translate_merge) {
+            bool done = next == InputMode::TranslateEn ? translate_merge->apply() : translate_merge->restore();
+            if (!done) {
+                // A half-written merge is never served: put the base weights back, stay where we were.
+                if (!translate_merge->restore()) fprintf(stderr, "beamd: cannot restore the base weights\n");
+                return false;
+            }
+        }
         mode = next;
-        bool translated = next == InputMode::TranslateEn && translate_adapter;
+        bool translated = next == InputMode::TranslateEn && translate_ready;
         active_version = translated ? kPromptV4 : prompt_version;
         active_strategy = translated ? translate_strategy : decoding_strategy;
         return apply_adapters();
@@ -408,12 +424,15 @@ const std::string & Engine::model_name() const { return impl_->name; }
 const std::string & Engine::backend_name() const { return impl_->backend; }
 const std::string & Engine::prompt_version() const { return impl_->prompt_version; }
 bool Engine::supports(InputMode mode) const {
-    return mode == InputMode::Ime || dual_prompt(impl_->prompt_version) || impl_->translate_adapter != nullptr;
+    return mode == InputMode::Ime || dual_prompt(impl_->prompt_version) || impl_->translate_ready;
 }
+bool Engine::translate_merged() const { return impl_->translate_merge && impl_->translate_merge->merged(); }
 
 bool Engine::set_translate_adapter(const std::string & path, std::string & error) {
     auto & m = *impl_;
     if (dual_prompt(m.prompt_version)) { error = "model_already_translates"; return false; }
+    // The mode is chosen per query, so leaving it here costs nothing; it takes a previous merge out.
+    if (m.mode == InputMode::TranslateEn && !m.select_mode(InputMode::Ime)) { error = "translate_adapter_apply_failed"; return false; }
     auto * next = llama_adapter_lora_init(m.model, path.c_str());
     if (!next) { error = "translate_adapter_load_failed"; return false; }
     char value[64];
@@ -432,14 +451,24 @@ bool Engine::set_translate_adapter(const std::string & path, std::string & error
         try { m.pronunciation = std::make_unique<Pronunciations>(std::filesystem::u8path(m.options.pinyin_path)); }
         catch (const std::exception &) { llama_adapter_lora_free(next); error = "pinyin_data_unavailable"; return false; }
     }
+    std::unique_ptr<Q8LoraMerge> merge;
+    if (m.options.writable_weights) {
+        std::string reason;
+        merge = Q8LoraMerge::open(m.model, m.options.model_path, path, m.n_threads, reason);
+        if (!merge) fprintf(stderr, "beamd: translate adapter stays unmerged (%s)\n", reason.c_str());
+    }
+    m.translate_merge = std::move(merge);  // the previous merge, if any, is already out of the weights
     auto * previous = m.translate_adapter;
-    m.translate_adapter = next;
+    m.translate_adapter = m.translate_merge ? nullptr : next;
+    if (m.translate_merge) llama_adapter_lora_free(next);  // validation only: the weights carry it
+    m.translate_ready = true;
     m.translate_strategy = strategy;
     m.reset_cache(); m.prompt_toks.clear(); m.first_logits.clear();
     if (m.mode == InputMode::TranslateEn) { m.active_version = kPromptV4; m.active_strategy = strategy; }
     if (!m.apply_adapters()) {
         m.translate_adapter = previous;
-        llama_adapter_lora_free(next); error = "translate_adapter_apply_failed"; return false;
+        if (!m.translate_merge) llama_adapter_lora_free(next);
+        error = "translate_adapter_apply_failed"; return false;
     }
     if (previous) llama_adapter_lora_free(previous);
     return true;

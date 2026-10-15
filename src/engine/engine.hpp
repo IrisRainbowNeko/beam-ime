@@ -18,6 +18,9 @@ struct EngineOptions {
     int context_chars = 64;   // matches the training data
     std::string backend_dir;
     std::string pinyin_path;
+    // Load the weights into writable memory (no mmap) so a translation adapter can be folded
+    // into them. Set it when a translate adapter is going to be used and merging is wanted.
+    bool writable_weights = false;
 };
 
 struct QueryOptions {
@@ -50,7 +53,11 @@ class Engine {
     bool set_adapter(const std::string & path, std::string & error);
     // English translation for an IME-only model: a LoRA adapter whose GGUF metadata names its
     // prompt format. It is active only in translate_en mode; ordinary input never sees it.
+    // With writable_weights and a Q8_0 model the adapter is folded into the weights while the
+    // mode is active (faster per token) and taken out again on leaving it; otherwise it runs as
+    // a separate LoRA.
     bool set_translate_adapter(const std::string & path, std::string & error);
+    bool translate_merged() const;
     // keys: raw input letters ("nhsj", "ni'hao"); context: text the user typed before, any length.
     QueryResult query(const std::string & keys, const std::string & context, const QueryOptions & options);
 

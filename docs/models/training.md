@@ -277,3 +277,20 @@ PYTHONPATH=/path/llama.cpp/gguf-py python tools/models/export_translate_adapter.
 `beamd --translate-adapter beam-translate.gguf`，或把文件命名为 `beam-translate.gguf` 放在模型旁，即可启用
 `translate_en`。adapter 的 GGUF 元数据记录 `beam.prompt_version=keys_llm_v4` 和解码策略；基座已经是双模式模型时拒绝加载。
 译英模式只使用译英 adapter，个人 LoRA 仍只作用于普通输入；切换模式会清空 KV 并重新应用 adapter。
+
+### 运行时合并
+
+默认情况下，`beamd` 在进入译英模式时把 adapter 直接加到权重上，离开时换回原权重，不需要第二份模型文件：
+
+- 基座必须是 Q8_0，`beamd` 以非 mmap 方式加载权重（只在存在译英 adapter 时）。adapter 被加成整数量化步长
+  （`round(ΔW / 块尺度)`，块尺度保持不变，越界截断到 ±127），不重新量化，所以权重仍是 Q8_0。
+- 进入和离开都从模型文件重读原始 Q8 块再写入：离开后权重与文件逐字节相同（`restore` 之后比较全部 196 个矩阵，0 字节差异），
+  内存里只多一份 f32 的 adapter（约 80 MB）。
+- 进入一次约 0.3 s（AVX2 路径；其他 CPU 退回标量实现，数秒），离开约 0.1 s；这段时间内的第一次译英查询会等待。
+  合并后每个 token 少两次小矩阵乘，Vulkan 上译英 p50 约降低 25%。
+- 英文 exact-match（semantic-500）：不合并 26.8% / 37.4%（P@1 / P@5），在线合并 27.2% / 37.6%，差异在置信区间内。
+- 个人 LoRA 在译英模式下不起作用（权重已合并译英 adapter），回到普通输入后照常生效。
+
+`--translate-merge off` 关闭合并，改用 llama.cpp 的非合并 LoRA（随时可切换，每个 token 稍慢）。
+合并需要 llama.cpp 的一个公开访问器 `llama_model_get_tensor`，由 `src/engine/llama-model-tensor.patch` 提供，CMake 配置时自动应用到
+llama.cpp 源码（已应用则跳过）。
