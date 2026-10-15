@@ -12,6 +12,9 @@
 //   beam/socket: path          Unix only; default $BEAM_SOCKET, else $XDG_RUNTIME_DIR/beam-ime/beamd.sock
 //   beam/timeout_ms: 400       whole request budget before falling back
 //   beam/beam_ms: 150          beam search budget inside beamd (0 = Top-1 only)
+//   beam/translate_timeout_ms: 1500, beam/translate_beam_ms: 500
+//                              the same two budgets in English-translation mode, which decodes
+//                              two fields and may take longer
 //   beam/candidates: 5
 //   beam/context: true         send recently committed text as context
 //   beam/max_letters: 40       longer inputs are left to the normal translators
@@ -291,8 +294,10 @@ class BeamTranslator final : public ::rime::Translator {
         if (keys == last_keys_ && context == last_context_ && mode == last_mode_ && last_generation_ == typed_->generation) {
             candidates = last_candidates_;
         } else {
-            auto reply = typed_->client->query({{"op", "query"}, {"keys", keys}, {"context", context},
-                                                {"mode", mode}, {"max", max_candidates_}, {"beam_ms", beam_ms_}}, timeout_ms_);
+            bool translating = mode == "translate_en";
+            auto reply = typed_->client->query({{"op", "query"}, {"keys", keys}, {"context", context}, {"mode", mode},
+                                                {"max", max_candidates_}, {"beam_ms", translating ? translate_beam_ms_ : beam_ms_}},
+                                               translating ? translate_timeout_ms_ : timeout_ms_);
             if (!reply || !reply->value("ok", false) || !reply->contains("candidates") || !(*reply)["candidates"].is_array()) {
                 if (mode == "translate_en") {
                     auto error = reply ? reply->value("error", "invalid_response") : "timeout";
@@ -365,6 +370,8 @@ class BeamTranslator final : public ::rime::Translator {
                 if (config->GetString("beam/socket", &value) && !value.empty()) socket = value;
                 config->GetInt("beam/timeout_ms", &timeout_ms_);
                 config->GetInt("beam/beam_ms", &beam_ms_);
+                config->GetInt("beam/translate_timeout_ms", &translate_timeout_ms_);
+                config->GetInt("beam/translate_beam_ms", &translate_beam_ms_);
                 config->GetInt("beam/candidates", &max_candidates_);
                 config->GetInt("beam/max_letters", &max_letters_);
                 if (config->GetBool("beam/context", &flag)) use_context_ = flag;
@@ -376,6 +383,8 @@ class BeamTranslator final : public ::rime::Translator {
     std::shared_ptr<TypedText> typed_;
     int timeout_ms_ = 400;
     int beam_ms_ = 150;
+    int translate_timeout_ms_ = 1500;
+    int translate_beam_ms_ = 500;
     int max_candidates_ = 5;
     int max_letters_ = 40;
     bool use_context_ = true;
