@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import collections
 import hashlib
+import functools
 import json
 import math
 import random
@@ -115,7 +116,7 @@ def task_batches(examples: list[dict], batch_size: int, rng: random.Random) -> l
     return result
 
 
-def fragment_batches(examples, batch_size, rng):
+def fragment_batches(examples, batch_size, rng, wait_share=.1):
     if batch_size % 4:
         raise ValueError('fragment batch size must be divisible by four')
     pools = {(mode, bucket): [r for r in examples if r['mode'] == mode and r['length_bucket'] == bucket]
@@ -137,7 +138,7 @@ def fragment_batches(examples, batch_size, rng):
             lengths.append(width - sum(lengths))
             selected_wait = collections.defaultdict(list)
             if mode == 'translate_en':
-                for _ in range(round(width * .1)):
+                for _ in range(round(width * wait_share)):
                     available = [r for r in waiting if len(selected_wait[r['length_bucket']]) < lengths[r['length_bucket']]]
                     if not available:
                         raise ValueError('missing waiting translation training examples')
@@ -390,7 +391,7 @@ def train(args: argparse.Namespace) -> None:
     optimizer = torch.optim.AdamW(
         [p for p in model.parameters() if p.requires_grad], lr=args.learning_rate, weight_decay=args.weight_decay, betas=(0.9, 0.95), fused=device.type == 'cuda',
     )
-    make_batches = fragment_batches if getattr(args, 'fragment_sampling', False) else task_batches if dual_task else batches
+    make_batches = functools.partial(fragment_batches, wait_share=args.wait_share) if getattr(args, 'fragment_sampling', False) else task_batches if dual_task else batches
     steps_per_epoch = len(make_batches(train_examples, args.batch_size, random.Random(args.seed)))
     total_steps = steps_per_epoch * args.epochs
     if getattr(args, 'max_steps', None):
@@ -540,6 +541,7 @@ def main() -> None:
     parser.add_argument('--fragment-sampling', action='store_true')
     parser.add_argument('--preferences', help='8000 training-only English preference pairs for D3')
     parser.add_argument('--max-steps', type=int)
+    parser.add_argument('--wait-share', type=float, default=.1, help='share of translation rows that are need_more_input')
     parser.add_argument('--lora-rank', type=int, default=0, help='train a LoRA adapter on a frozen base instead of all weights')
     parser.add_argument('--translate-only', action='store_true', help='skip ordinary-input loss; used for the translation adapter')
     parser.add_argument("--epochs", type=int, default=2)
