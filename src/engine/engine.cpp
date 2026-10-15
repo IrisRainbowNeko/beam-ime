@@ -25,6 +25,16 @@ double ms_since(Clock::time_point t0) {
     return std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
 }
 
+// Translations that differ only in case, spacing or punctuation are one candidate.
+std::string translation_key(const std::string & text) {
+    std::string key;
+    for (unsigned char ch : text) {
+        if (std::isalnum(ch) && ch < 128) key += (char) std::tolower(ch);
+        else if (ch >= 128) key += (char) ch;
+    }
+    return key;
+}
+
 struct Beam {
     std::vector<llama_token> toks;
     float score;
@@ -484,7 +494,7 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
             for (auto & [s, text] : fin) {
                 if ((int) ranked.size() >= options.max_candidates) break;
                 auto parsed = parse(text);
-                std::string f = parsed ? (options.mode == InputMode::Ime ? fold_case(parsed->text) : parsed->text) : "";
+                std::string f = parsed ? (options.mode == InputMode::Ime ? fold_case(parsed->text) : translation_key(parsed->text)) : "";
                 if (parsed && std::find(folded.begin(), folded.end(), f) == folded.end()) {
                     ranked.push_back(text);
                     folded.push_back(f);
@@ -495,7 +505,7 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
         result.beam_ms = ms_since(t1);
     }
     auto parsed_top = !m.greedy_finished ? std::nullopt : parse(top);
-    auto top_id = parsed_top ? (options.mode == InputMode::Ime ? fold_case(parsed_top->text) : parsed_top->text) : "";
+    auto top_id = parsed_top ? (options.mode == InputMode::Ime ? fold_case(parsed_top->text) : translation_key(parsed_top->text)) : "";
     if (parsed_top && options.mode == InputMode::TranslateEn && m.active_strategy == "greedy_first") {
         ranked.erase(std::remove_if(ranked.begin(), ranked.end(), [&](const std::string & text) {
             return parse(text)->text == parsed_top->text;
