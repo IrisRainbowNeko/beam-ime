@@ -13,6 +13,7 @@
 //   beam/timeout_ms: 400       whole request budget before falling back
 //   beam/beam_ms: 150          beam search budget inside beamd (0 = Top-1 only)
 //   beam/translate_timeout_ms: 1500   whole request budget in English-translation mode
+//   beam/translate_beam_ms: 300  beam search budget for the Chinese candidates in that mode
 //   beam/translate_ms: 1000    English budget inside beamd after the Chinese candidates
 //   beam/candidates: 5
 //   beam/context: true         send recently committed text as context
@@ -295,7 +296,7 @@ class BeamTranslator final : public ::rime::Translator {
         } else {
             bool translating = mode == "translate_en";
             auto reply = typed_->client->query({{"op", "query"}, {"keys", keys}, {"context", context},
-                                                {"mode", mode}, {"max", max_candidates_}, {"beam_ms", beam_ms_},
+                                                {"mode", mode}, {"max", max_candidates_}, {"beam_ms", translating ? translate_beam_ms_ : beam_ms_},
                                                 {"translate_ms", translate_ms_}},
                                                translating ? translate_timeout_ms_ : timeout_ms_);
             if (!reply || !reply->value("ok", false) || !reply->contains("candidates") || !(*reply)["candidates"].is_array()) {
@@ -371,6 +372,7 @@ class BeamTranslator final : public ::rime::Translator {
                 config->GetInt("beam/timeout_ms", &timeout_ms_);
                 config->GetInt("beam/beam_ms", &beam_ms_);
                 config->GetInt("beam/translate_timeout_ms", &translate_timeout_ms_);
+                config->GetInt("beam/translate_beam_ms", &translate_beam_ms_);
                 config->GetInt("beam/translate_ms", &translate_ms_);
                 config->GetInt("beam/candidates", &max_candidates_);
                 config->GetInt("beam/max_letters", &max_letters_);
@@ -384,6 +386,7 @@ class BeamTranslator final : public ::rime::Translator {
     int timeout_ms_ = 400;
     int beam_ms_ = 150;
     int translate_timeout_ms_ = 1500;
+    int translate_beam_ms_ = 300;
     int translate_ms_ = 1000;
     int max_candidates_ = 5;
     int max_letters_ = 40;
