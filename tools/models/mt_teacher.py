@@ -6,7 +6,8 @@
         --input rows.jsonl --output labels.jsonl --workers 64 [--no-thinking]
 
 Input rows need "chinese" and "context"; each output row adds "english" (empty when the reply was unusable)
-and "teacher". Rows already in --output are skipped, so an interrupted run resumes. The token comes from
+and "teacher". A row with context_kind "english" also gets its context translated: the output context is that
+English (the Chinese one moves to context_chinese), as if the user had committed it in translate mode. Rows already in --output are skipped, so an interrupted run resumes. The token comes from
 $MT_TEACHER_TOKEN or --env-file (KEY=VALUE lines with AUTH_TOKEN).
 """
 import argparse
@@ -32,24 +33,35 @@ SYSTEM = (
     'the translation must not contain Chinese characters.')
 
 
+SYSTEM_ENGLISH_CONTEXT = SYSTEM.replace(
+    'Reply with one JSON object {"translation": "..."} and nothing else; the translation must',
+    'Also translate the context on its own into English. Reply with one JSON object '
+    '{"translation": "...", "english_context": "..."} and nothing else; neither field may')
+
+
+def english_context(row):
+    return row.get('context_kind') == 'english' and bool(row['context'])
+
+
 def messages(row):
-    return [{'role': 'system', 'content': SYSTEM},
+    system = SYSTEM_ENGLISH_CONTEXT if english_context(row) else SYSTEM
+    return [{'role': 'system', 'content': system},
             {'role': 'user', 'content': json.dumps({'context': row['context'], 'fragment': row['chinese']}, ensure_ascii=False)}]
 
 
-def parse(text):
-    if not text:
+def clean(value):
+    if not isinstance(value, str) or re.search('[一-鿿\t\r\n]', value) or not re.search('[A-Za-z0-9]', value):
         return ''
-    found = re.findall(r'\{[^{}]*"translation"[^{}]*\}', text)
-    if not found:
-        return ''
+    return value.strip()
+
+
+def parse(text, fields=('translation',)):
+    found = re.findall(r'\{[^{}]*"translation"[^{}]*\}', text or '')
     try:
-        english = json.loads(found[-1])['translation']
-    except (json.JSONDecodeError, KeyError, TypeError):
-        return ''
-    if not isinstance(english, str) or re.search('[一-鿿\t\r\n]', english):
-        return ''
-    return english.strip()
+        value = json.loads(found[-1]) if found else {}
+    except json.JSONDecodeError:
+        value = {}
+    return [clean(value.get(field)) for field in fields]
 
 
 class Client:
@@ -110,14 +122,19 @@ def main():
     done = set()
     if args.output.exists():
         with args.output.open(encoding='utf-8') as handle:
-            done = {(r['chinese'], r['context']) for r in map(json.loads, handle)}
+            done = {(r['chinese'], r.get('context_chinese', r['context'])) for r in map(json.loads, handle)}
     todo = [r for r in rows if (r['chinese'], r['context']) not in done]
     lock, started, tokens, count = threading.Lock(), time.time(), 0, 0
     name = args.model + ('' if client.thinking else ':no-thinking')
 
     def work(row):
         text, usage = client.chat(messages(row))
-        return {**row, 'english': parse(text), 'teacher': name}, usage.get('completion_tokens', 0)
+        if english_context(row):
+            english, context = parse(text, ('translation', 'english_context'))
+            result = {**row, 'context': context[-64:], 'context_chinese': row['context'], 'english': english if context else ''}
+        else:
+            result = {**row, 'english': parse(text)[0]}
+        return {**result, 'teacher': name}, usage.get('completion_tokens', 0)
 
     with args.output.open('a', encoding='utf-8') as out, concurrent.futures.ThreadPoolExecutor(args.workers) as pool:
         for result, used in pool.map(work, todo):
