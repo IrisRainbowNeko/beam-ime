@@ -58,6 +58,7 @@ struct Engine::Impl {
     // never sees the adapter, so ordinary input stays unchanged.
     static constexpr int kTranslateSeqs = 8;
     llama_adapter_lora * translate_adapter = nullptr;
+    std::string translate_version;              // the adapter's prompt: keys_llm_v4 or zh_en_v1
     llama_context * tctx = nullptr;
     llama_memory_t tmem = nullptr;
     llama_batch tbatch = {};
@@ -262,21 +263,23 @@ struct Engine::Impl {
     }
 
     // English for each Chinese candidate, decoded side by side and greedily: seq 0 holds the
-    // shared prompt (reused across keystrokes), seq i + 1 continues it with "<Chinese i>\t".
+    // shared prompt (reused across keystrokes; with zh_en_v1 it holds no keys), seq i + 1 continues it
+    // with Chinese i and the separator of the adapter's prompt.
     // A sequence still running at the deadline gets no English.
     bool translate(const std::string & keys, const std::string & context, const std::vector<std::string> & chinese,
                    Clock::time_point deadline, std::vector<std::string> & english) {
         english.assign(chinese.size(), "");
         const int n = std::min((int) chinese.size(), kTranslateSeqs);
         if (n == 0) return true;
-        std::string text = task_prompt(keys, context, InputMode::TranslateEn, kPromptV4);
+        const bool zh_en = translate_version == kPromptZhEn;
+        std::string text = zh_en ? zh_en_prefix(context) : task_prompt(keys, context, InputMode::TranslateEn, kPromptV4);
         auto prompt = tokenize(text);
         const int np = (int) prompt.size();
         const int max_new = 48;
         std::vector<std::vector<llama_token>> tails(n);
         int cells = np, queued = 0;
         for (int i = 0; i < n; ++i) {
-            auto full = tokenize(text + chinese[i] + "\t");
+            auto full = tokenize(text + chinese[i] + (zh_en ? "\n英文：" : "\t"));
             // The prompt must tokenize the same alone and followed by the candidate to share its cells.
             if ((int) full.size() <= np || !std::equal(prompt.begin(), prompt.end(), full.begin())) continue;
             tails[i].assign(full.begin() + np, full.end());
@@ -507,7 +510,8 @@ bool Engine::set_translate_adapter(const std::string & path, std::string & error
     if (!next) { error = "translate_adapter_load_failed"; return false; }
     char value[64];
     int length = llama_adapter_meta_val_str(next, "beam.prompt_version", value, sizeof(value));
-    if (length <= 0 || length >= (int) sizeof(value) || std::string(value, length) != kPromptV4) {
+    std::string version = length > 0 && length < (int) sizeof(value) ? std::string(value, length) : "";
+    if (version != kPromptV4 && version != kPromptZhEn) {
         llama_adapter_lora_free(next); error = "translate_adapter_prompt_unsupported"; return false;
     }
     if (!m.tctx) {
@@ -527,6 +531,7 @@ bool Engine::set_translate_adapter(const std::string & path, std::string & error
     }
     if (m.translate_adapter) llama_adapter_lora_free(m.translate_adapter);
     m.translate_adapter = next;
+    m.translate_version = version;
     llama_memory_clear(m.tmem, true);
     m.tcached.clear();
     // Warm up the batch sizes of a translation so the first one is not slow.

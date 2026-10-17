@@ -10,6 +10,8 @@ inline constexpr const char * kPromptV1 = "keys_llm_v1";
 inline constexpr const char * kPromptV2 = "keys_llm_v2";
 inline constexpr const char * kPromptV3 = "keys_llm_v3";
 inline constexpr const char * kPromptV4 = "keys_llm_v4";
+// Translate stage of an IME-only model: Chinese (no keys) in, English out. tools/models/mt_format.py.
+inline constexpr const char * kPromptZhEn = "zh_en_v1";
 inline bool dual_prompt(const std::string & version) { return version == kPromptV2 || version == kPromptV3 || version == kPromptV4; }
 inline bool chinese_first(const std::string & version) { return version == kPromptV3 || version == kPromptV4; }
 enum class InputMode { Ime, TranslateEn };
@@ -26,6 +28,11 @@ inline std::string task_prompt(const std::string & keys, const std::string & con
     else if (version != kPromptV1 || mode != InputMode::Ime) throw std::invalid_argument("unsupported_mode");
     auto tail = utf8_tail(context, 64);
     return prefix + (tail.empty() ? "" : "上文：" + tail + "\n") + "按键：" + spaced(normalize_keys(keys)) + "\n结果：";
+}
+// zh_en_v1 text before the Chinese; the Chinese is followed by "\n英文：".
+inline std::string zh_en_prefix(const std::string & context) {
+    auto tail = utf8_tail(context, 64);
+    return "任务：中译英\n" + (tail.empty() ? "" : "上文：" + tail + "\n") + "中文：";
 }
 inline int output_budget(InputMode mode, int letters) {
     return mode == InputMode::Ime ? 2 * letters + 8 : std::min(192, 4 * letters + 32);

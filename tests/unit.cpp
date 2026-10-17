@@ -28,6 +28,8 @@ int main() {
     check(fragment && !fragment->need_more_input && fragment->text == "Take a look", "Chinese-first fragment");
     check(!parse_candidate("做其他\tDo其他.", "zuoqt", InputMode::TranslateEn, kPromptV4), "reject Hanzi in English");
     check(task_prompt("d", "你好", InputMode::TranslateEn, kPromptV4) == "任务：译英\n上文：你好\n按键：d\n结果：", "v4 prompt");
+    check(zh_en_prefix("") == "任务：中译英\n中文：", "zh_en prompt");
+    check(zh_en_prefix("我们明天") == "任务：中译英\n上文：我们明天\n中文：", "zh_en prompt with context");
     float score = bilingual_score({-1.f, -.1f, -2.f}, {"你好", "\t", "Hello"}, kPromptV4);
     check(std::abs(score + 1.25f) < 1e-6f, "bilingual field score ignores tab");
     check(!std::isfinite(bilingual_score({-1.f}, {"你好"}, kPromptV4)), "missing English has no score");

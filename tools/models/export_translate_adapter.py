@@ -6,9 +6,11 @@
         --llama-source /path/llama.cpp --base /path/ime-checkpoint --adapter /path/run/epoch-2/adapter \
         --output beam-translate.gguf
 
-The GGUF records the prompt format (keys_llm_v4) and decoding strategy, so the daemon needs no other flag.
+The GGUF records the prompt format (zh_en_v1 for mt_train.py adapters, which carry beam-mt.json; keys_llm_v4
+otherwise) and decoding strategy, so the daemon needs no other flag.
 """
 import argparse
+import json
 import subprocess
 import sys
 import tempfile
@@ -38,7 +40,9 @@ def main():
             val_type = field.types[0]
             sub_type = field.types[-1] if val_type == gguf.GGUFValueType.ARRAY else None
             writer.add_key_value(field.name, field.contents(), val_type, sub_type=sub_type)
-        writer.add_string('beam.prompt_version', 'keys_llm_v4')
+        meta = args.adapter / 'beam-mt.json'
+        version = json.loads(meta.read_text(encoding='utf-8'))['prompt_version'] if meta.exists() else 'keys_llm_v4'
+        writer.add_string('beam.prompt_version', version)
         writer.add_string('beam.decoding_strategy', args.decoding_strategy)
         for t in reader.tensors:
             writer.add_tensor_info(t.name, t.data.shape, t.data.dtype, t.data.nbytes, t.tensor_type)

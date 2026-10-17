@@ -51,7 +51,7 @@ class Engine {
     bool supports(InputMode mode) const;
     bool set_adapter(const std::string & path, std::string & error);
     // English translation for an IME-only model: a LoRA adapter (GGUF metadata
-    // beam.prompt_version=keys_llm_v4). In translate_en mode the IME's candidates are translated
+    // beam.prompt_version zh_en_v1, or keys_llm_v4 for older ones). In translate_en mode the IME's candidates are translated
     // one by one in a second context that holds the adapter; ordinary input never sees it.
     bool set_translate_adapter(const std::string & path, std::string & error);
     // keys: raw input letters ("nhsj", "ni'hao"); context: text the user typed before, any length.
