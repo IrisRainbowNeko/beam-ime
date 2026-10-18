@@ -52,11 +52,12 @@ def main():
     parser.add_argument('--calls', type=int, default=1000)
     parser.add_argument('--per-call', type=int, default=20)
     parser.add_argument('--workers', type=int, default=32)
+    parser.add_argument('--max-tokens', type=int, default=8192)
     parser.add_argument('--exclude', type=Path, action='append', default=[])
     parser.add_argument('--seed', type=int, default=20261018)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
-    client = Client(args.base_url, args.model, read_token(args), True, 8192, 1.0)
+    client = Client(args.base_url, args.model, read_token(args), True, args.max_tokens, 1.0)
     held = [r['chinese'] for path in args.exclude for r in map(json.loads, path.open(encoding='utf-8'))
             if len(r['chinese']) >= 4]
     rng = random.Random(args.seed)
