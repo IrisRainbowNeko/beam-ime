@@ -7,7 +7,8 @@
 A strong-teacher row replaces the bulk row of the same fragment when it has English (its context replaces the
 bulk context too, since English contexts were translated again). Rows without English are dropped. The dev split
 holds out whole messages by hash; test.jsonl is copied from --base-corpus so scores stay comparable.
---keep-base-train adds the base corpus's training rows (an older teacher) as well.
+--keep-base-train adds the base corpus's training rows (an older teacher) as well, taking the strong teacher's
+translation where it has one.
 """
 import argparse
 import collections
@@ -55,7 +56,11 @@ def main():
                                                    'english': chosen['english'], 'source': row.get('source', ''),
                                                    'teacher': chosen['teacher']})
     if args.keep_base_train:
-        splits['train'] += [{**r, 'teacher': 'Qwen3-32B'} for r in read(args.base_corpus / 'train.jsonl')]
+        for row in read(args.base_corpus / 'train.jsonl'):
+            chosen = strong.get(key(row), {**row, 'teacher': 'Qwen3-32B'})
+            teachers[chosen['teacher'] + ':base'] += 1
+            splits['train'].append({'chinese': row['chinese'], 'context': chosen['context'], 'english': chosen['english'],
+                                    'source': row.get('source', ''), 'teacher': chosen['teacher']})
     args.output.mkdir(parents=True, exist_ok=True)
     for name, rows in splits.items():
         with (args.output / f'{name}.jsonl').open('w', encoding='utf-8') as handle:
