@@ -36,6 +36,7 @@ def main():
     parser.add_argument('--count', type=int, default=500000)
     parser.add_argument('--rate', type=float, default=.02, help='share of messages considered')
     parser.add_argument('--seed', type=int, default=20261017)
+    parser.add_argument('--source', default='lccc-base')
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
 
@@ -79,7 +80,7 @@ def main():
                     seen.add((chinese, context))
                     kind = 'empty' if not context else 'english' if rng.random() < .25 else 'chinese'
                     out.append({'chinese': chinese, 'context': context, 'context_kind': kind, 'parent_text': text,
-                                'source': 'lccc-base'})
+                                'source': args.source})
             if len(out) >= args.count:
                 break
     rng.shuffle(out)
