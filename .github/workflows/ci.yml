@@ -43,6 +43,8 @@ jobs:
         env: {CMAKE_BUILD_PARALLEL_LEVEL: '2'}
       - name: Rime bilingual mode and commit isolation
         run: |
+          # Ubuntu 24.04 runners keep unprivileged user namespaces from bwrap (the test's sandbox).
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           cmake --build build/release --target rime_smoke
           BEAM_TEST_RIME_BUILD="$PWD/build/release" python3 -m unittest discover -s tests -p test_rime_translation.py -v
       - run: python3 tools/package_linux.py --format deb
