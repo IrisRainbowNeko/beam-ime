@@ -25,7 +25,7 @@ def main():
     parser.add_argument('--base', type=Path, required=True, help='the full-precision checkpoint the base GGUF was made from')
     parser.add_argument('--adapter', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--decoding-strategy', choices=('beam', 'greedy_first', 'field'), default='field')
+    parser.add_argument('--decoding-strategy', choices=('beam', 'greedy_first', 'field', 'diverse'), default='field')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory() as temporary:
         raw = Path(temporary) / 'adapter.gguf'
