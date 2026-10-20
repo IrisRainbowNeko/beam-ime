@@ -35,6 +35,8 @@ Linux 使用用户私有 Unix socket，默认 `$XDG_RUNTIME_DIR/beam-ime/beamd.s
 格式错误、超时和需要继续输入分别显示。`ready` 下的空数组表示没有有效候选。
 GGUF 可通过 `beam.decoding_strategy` 选择 `beam`、`greedy_first` 或 `field`；后两项仅影响译英，
 由固定公开验证集选定。字段评分复用本次搜索的 token 概率，不增加第二次语义推理。
+译英 adapter 还可选 `diverse`：beam 只搜到中文字段末尾，保留多个不同的中文读法，再批量 greedy 写各自的英文，
+不足时用普通 beam 的英文补位；读法检查允许一处手误（`Pronunciations::spells`）。当前发布的译英 adapter 使用 `diverse`。
 health 包含 `version`、`protocol`、`model`、`backend`、`prompt_version` 和 `modes`。
 GGUF 的 `beam.prompt_version` 决定任务能力；缺失时按 `keys_llm_v1` 普通输入处理。
 旧模型的译英请求返回 `unsupported_mode`，未知模式返回 `invalid_mode`。
