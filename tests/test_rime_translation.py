@@ -83,6 +83,8 @@ translator:
 beam:
   timeout_ms: 400
   beam_ms: 0
+  translate_timeout_ms: 400
+  translate_beam_ms: 0
 ''', encoding='utf-8')
         (user / 'beam_test.dict.yaml').write_text('---\nname: beam_test\nversion: "1"\nsort: original\n...\n你\tni\t100\n好\thao\t100\n你好\tni hao\t100\n', encoding='utf-8')
         self.command = ['bwrap', '--ro-bind', '/', '/', '--bind', str(self.root), str(self.root),

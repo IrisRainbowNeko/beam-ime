@@ -58,10 +58,13 @@ beamctl setup
 
 ## 英文翻译（开发版）
 
-当前 v0.2.1 下载包及模型仍为普通输入版本；译英开关需要配套的 `keys_llm_v2` 统一模型。
-双模式训练和接口说明见 [模型开发](docs/models/training.md#双模式联合训练)。
+译英使用一个随普通模型加载的 LoRA adapter，没有独立翻译模型：
+[translate-en-v1](https://github.com/IrisRainbowNeko/beam-ime/releases/tag/translate-en-v1) 发布了
+`beam-translate-en-v1.gguf`，放到主模型旁并命名为 `beam-translate.gguf` 即可。
+它需要从 main 构建的 `beamd`，v0.2.1 下载包还不能使用。
+训练和解码说明见 [模型开发](docs/models/training.md) 与 [模型卡](docs/models/translate-model-card.md)。
 
-安装双模式模型后，在 Rime 方案选单中展开开关、翻页找到「普通输入 → 英文翻译」。
+放好 adapter 后，在 Rime 方案选单中展开开关、翻页找到「普通输入 → 英文翻译」。
 输入拼音，候选正文为英文、旁边注释为中文，选中时仅上屏英文。
 切回「普通输入」会保留当前按键并重建中文候选；选择「经典」也会退出翻译。
 译英超时保留拼音，可以补充按键或切回普通模式；旧模型会提示更新统一模型。
