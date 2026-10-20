@@ -287,7 +287,7 @@ def evaluate(args: argparse.Namespace) -> None:
     tokenizer = AutoTokenizer.from_pretrained(args.checkpoint, padding_side="left")
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else tokenizer.eos_token_id
     model = AutoModelForCausalLM.from_pretrained(args.checkpoint, torch_dtype=torch.bfloat16, attn_implementation="sdpa")
-    model.to("cuda").eval()
+    model.to(args.device).eval()
     version = args.prompt_version or getattr(model.config, 'beam_prompt_version', 'keys_llm_v1')
 
     order = sorted(range(len(rows)), key=lambda index: len(rows[index]["keys"]))
@@ -296,7 +296,7 @@ def evaluate(args: argparse.Namespace) -> None:
     for start in range(0, len(order), args.batch_size):
         indices = order[start:start + args.batch_size]
         prompts = [build_prompt(rows[i]["keys"], rows[i].get("context", ""), rows[i].get('mode', 'ime'), version) + '结果：' for i in indices]
-        encoded = tokenizer(prompts, add_special_tokens=False, padding=True, return_tensors="pt").to("cuda")
+        encoded = tokenizer(prompts, add_special_tokens=False, padding=True, return_tensors="pt").to(args.device)
         strategy = getattr(args, 'decoding', 'beam')
         output = model.generate(
             **encoded,
@@ -421,6 +421,7 @@ def main() -> None:
     parser.add_argument("--drop-context", action="store_true", help="evaluate the same rows without context")
     parser.add_argument("--seen-from", nargs="*", help="training JSONL files that define seen targets")
     parser.add_argument('--gpu-memory-fraction', type=float)
+    parser.add_argument('--device', default='cuda', help='torch device for checkpoint evaluation')
     parser.add_argument('--decoding', choices=('beam', 'greedy_first', 'field'), default='beam')
     parser.add_argument('--runtime', help='beamd executable for isolated native GGUF replay on this machine')
     parser.add_argument('--translate-adapter', help='translate LoRA GGUF passed to beamd in --runtime replay')

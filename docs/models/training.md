@@ -294,3 +294,30 @@ PYTHONPATH=/path/llama.cpp/gguf-py python tools/models/export_translate_adapter.
 `--translate-merge off` 关闭合并，改用 llama.cpp 的非合并 LoRA（随时可切换，每个 token 稍慢）。
 合并需要 llama.cpp 的一个公开访问器 `llama_model_get_tensor`，由 `src/engine/llama-model-tensor.patch` 提供，CMake 配置时自动应用到
 llama.cpp 源码（已应用则跳过）。
+
+## 译英 one-stage adapter（当前默认）
+
+当前发布的译英 adapter 仍是 IME 基座上的一个 LoRA（r128），输入按键直接输出 `中文<TAB>English`，由两位教师蒸馏：
+
+1. 语料：`mt_fragments.py` 从 LCCC 切出输入片段，`mt_domain.py` 生成 LCCC 缺少的领域对话（术语、夹英文），
+   `mt_teacher.py` 用 OpenAI 兼容接口的大模型标注英文，`mt_hard.py` 挑难例交给更强的教师，`mt_merge.py` 合并去重。
+2. 英文教师：`mt_train.py` 在同一语料上全量微调一个 `zh_en_v1`（中文→英文，无按键）模型，只作教师用，
+   不随输入法发布；运行时也不加载 `zh_en_v1` adapter。
+3. `onestage_data.py` 给语料配上模拟按键（全拼 / 简拼 / 混拼），`onestage_train.py` 训练 LoRA：
+   中文部分对齐 IME 自身（同一模型关闭 adapter、用 keys_llm_v1 提示）做 KL 蒸馏，英文部分对齐英文教师。
+4. 导出时写入解码策略：
+
+```sh
+PYTHONPATH=/path/llama.cpp/gguf-py python tools/models/export_translate_adapter.py \
+  --llama-source /path/llama.cpp --base /path/ime-checkpoint --adapter os/epoch-3 \
+  --decoding-strategy diverse --output beam-translate.gguf
+```
+
+`diverse` 解码：beam 只搜到中文字段末尾的 TAB，保留若干个不同的中文读法，再用一次批量 greedy 给每个读法写英文；
+候选不足时用普通 beam 的其他英文补位。读法检查允许一处手误（在至少打了两个字母的音节内错一个、多一个、少一个或相邻对调），
+所以有错字的输入也有候选（`Pronunciations::spells`）。`beamd --translate-strategy` 可覆盖 adapter 里的策略。
+
+评测：`onestage_diverse.py`（HF 版同一解码，`--max-edits 1` 对应运行时的手误容忍）、`onestage_compare.py`
+（与"IME 选中文 + 再翻译"对比，输出整份前五候选）、`mt_judge.py`（大模型盲评）。在 307 条真实输入记录上（Vulkan，
+beam 500 ms），中文 Top1 / Top5 为 78.2% / 93.5%，平均 4.8 个候选，请求延迟 p50 / p95 约 205 / 464 ms。
+`key_noise.py` 可按 GeneInput 的打字习惯模拟按键，但用它训练的模型在真实记录上反而更差，默认不使用。
