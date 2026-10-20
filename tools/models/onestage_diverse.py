@@ -16,7 +16,49 @@ from pathlib import Path
 
 import torch
 
-from keys_llm_format import FRAGMENT_VERSION, RESULT_PREFIX, build_prompt, display_valid, parse_output
+from keys_llm_format import ENGLISH_PATTERN, FRAGMENT_VERSION, HAN_PATTERN, RESULT_PREFIX, build_prompt, display_valid, letters, \
+    parse_output, readings, units
+
+
+def one_edit(a, b):
+    """a and b differ by one substitution, insertion, deletion or adjacent swap."""
+    if a == b or abs(len(a) - len(b)) > 1:
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1 and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+    short, long = (a, b) if len(a) < len(b) else (b, a)
+    return any(long[:i] + long[i + 1:] == short for i in range(len(long)))
+
+
+def tolerant_valid(keys, parsed, max_edits):
+    """display_valid, or the keys spell the Chinese with up to max_edits slips, each inside a syllable typed with two or more letters."""
+    if display_valid(keys, parsed) or not max_edits:
+        return display_valid(keys, parsed)
+    pieces = units(parsed.get('comment') or '') if parsed.get('comment') else None
+    if not pieces or parsed.get('translation_status') == 'need_more_input' or not parsed['result'] or HAN_PATTERN.search(parsed['result']):
+        return False
+    code, states = letters(keys), {(0, 0)}
+    for piece in pieces:
+        following = set()
+        for position, edits in states:
+            if ENGLISH_PATTERN.fullmatch(piece):
+                if code.startswith(piece.lower(), position):
+                    following.add((position + len(piece), edits))
+                continue
+            for reading in readings(piece):
+                for width in range(1, len(reading) + 1):
+                    prefix = reading[:width]
+                    if code.startswith(prefix, position):
+                        following.add((position + width, edits))
+                    if edits < max_edits:
+                        for length in (width - 1, width, width + 1):
+                            if length >= 2 and one_edit(prefix, code[position:position + length]) and position + length <= len(code):
+                                following.add((position + length, edits + 1))
+        states = following
+        if not states:
+            return False
+    return any(position == len(code) for position, _ in states)
 
 
 def stop_tokens(tokenizer):
@@ -49,6 +91,7 @@ def main():
     parser.add_argument('--readings', type=int, default=5)
     parser.add_argument('--batch-size', type=int, default=32)
     parser.add_argument('--device', default='cuda')
+    parser.add_argument('--max-edits', type=int, default=0, help='accept readings the keys spell with this many slips')
     args = parser.parse_args()
     from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -100,7 +143,7 @@ def main():
             displayed = []
             for _, text, finished in (e for e in english if e[0] == offset):
                 candidate = parse_output(text, 'translate_en', FRAGMENT_VERSION)
-                if finished and display_valid(row['keys'], candidate):
+                if finished and tolerant_valid(row['keys'], candidate, args.max_edits):
                     if candidate.get('translation_status') == 'need_more_input':
                         if not displayed:
                             displayed.append(candidate)
