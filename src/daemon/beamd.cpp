@@ -67,7 +67,7 @@ volatile std::sig_atomic_t stopping = 0;
 
 void usage() {
     fprintf(stderr,
-            "usage: beamd --model MODEL.gguf [--translate-adapter ADAPTER.gguf] [--translate-merge on|off] [--socket PATH] [--ngl 99]\n"
+            "usage: beamd --model MODEL.gguf [--translate-adapter ADAPTER.gguf] [--translate-merge on|off] [--translate-strategy beam|field|diverse] [--socket PATH] [--ngl 99]\n"
             "             [--threads N] [--beam-ms 150]\n"
             "             [--log FILE] [--verbose] [--debug-text]%s\n",
 #ifdef _WIN32
@@ -111,6 +111,7 @@ int beamd_main(int argc, char ** argv) {
             if (choice != "on" && choice != "off") { usage(); return 2; }
             merge_translate = choice == "on";
         }
+        else if (a == "--translate-strategy") options.translate_strategy = value();
         else if (a == "--backend-dir") options.backend_dir = value();
         else if (a == "--socket") socket_path = value();
         else if (a == "--learning-dir") learning_directory = value();

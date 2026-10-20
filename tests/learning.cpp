@@ -8,6 +8,13 @@
 void require(bool value, const char * message) { if (!value) throw std::runtime_error(message); }
 int main(int argc, char ** argv) {
     if (argc != 2) return 2;
+    {
+        beam::Pronunciations table(argv[1]);
+        require(table.spells("新加坡", "xjp", 1) && table.spells("新加坡", "xinkiapo", 1), "slips: exact and one substitution");
+        require(table.spells("你请假了", "niqnigjial", 1) && table.spells("来游戏", "lauyouxi", 1), "slips: swap and substitution");
+        require(!table.spells("新加坡", "xinkiapo", 0) && !table.spells("新加坡", "xkp", 1), "slips: none allowed, or a one-letter syllable");
+        require(!table.spells("新加坡", "xinkiapuo", 1) || table.spells("新加坡", "xinkiapuo", 2), "slips: budget");
+    }
     auto temp = std::filesystem::temp_directory_path() / ("beam-learning-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     auto event = beam::Json{{"session", "test"}, {"composition", "1"}, {"event_id", "test:1"},
                            {"keys", "xinglanyinqing"}, {"text", "星澜引擎"}, {"first", "星蓝引擎"}, {"context", "新的开发组件"}};

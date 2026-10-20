@@ -112,6 +112,55 @@ std::vector<size_t> Pronunciations::align(const std::string & text, const std::s
     return boundaries;
 }
 
+namespace {
+// a[0..la) and b[0..lb) differ by one substitution, insertion, deletion or adjacent swap.
+bool one_edit(const char * a, size_t la, const char * b, size_t lb) {
+    if (la > lb) { std::swap(a, b); std::swap(la, lb); }
+    if (lb > la + 1) return false;
+    size_t i = 0;
+    while (i < la && a[i] == b[i]) ++i;
+    if (la == lb) {
+        if (i == la) return false;
+        if (std::equal(a + i + 1, a + la, b + i + 1)) return true;
+        return i + 1 < la && a[i] == b[i + 1] && a[i + 1] == b[i] && std::equal(a + i + 2, a + la, b + i + 2);
+    }
+    return std::equal(a + i, a + la, b + i + 1);
+}
+}
+
+bool Pronunciations::spells(const std::string & text, const std::string & input, int max_edits) const {
+    if (!align(text, input).empty()) return true;
+    auto chars = utf8_chars(text);
+    const auto keys = key_letters(input);
+    if (max_edits <= 0 || chars.empty() || keys.empty() || keys.size() > 40) return false;
+    const int none = 1 << 20;
+    std::vector<int> edits(keys.size() + 1, none), next;  // fewest slips to reach each key position
+    edits[0] = 0;
+    for (const auto & ch : chars) {
+        next.assign(keys.size() + 1, none);
+        auto found = table_.find(ch);
+        for (size_t p = 0; p <= keys.size(); ++p) if (edits[p] < none) {
+            auto reach = [&](size_t q, int e) { if (e <= max_edits && e < next[q]) next[q] = e; };
+            if (ch == " ") { reach(p, edits[p]); continue; }
+            if (ch.size() == 1) {
+                if (p < keys.size() && fold_case(ch)[0] == keys[p]) reach(p + 1, edits[p]);
+                continue;
+            }
+            if (found == table_.end()) continue;
+            for (const auto & reading : found->second)
+                for (size_t n = 1; n <= reading.size(); ++n) {
+                    if (p + n <= keys.size() && keys.compare(p, n, reading, 0, n) == 0) reach(p + n, edits[p]);
+                    if (edits[p] >= max_edits) continue;
+                    for (size_t length = std::max<size_t>(2, n - 1); length <= n + 1; ++length)
+                        if (p + length <= keys.size() && one_edit(reading.data(), n, keys.data() + p, length))
+                            reach(p + length, edits[p] + 1);
+                }
+        }
+        edits.swap(next);
+    }
+    return edits.back() <= max_edits;
+}
+
 std::pair<std::string, std::string> Pronunciations::codes(const std::string & text, const std::string & keys) const {
     auto readings = syllables(text, keys);
     auto chars = utf8_chars(text);

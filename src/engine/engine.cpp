@@ -36,6 +36,9 @@ std::string translation_key(const std::string & text) {
     return key;
 }
 
+// Slips of the finger a translated reading may have against the keys (a typo is still answered).
+constexpr int kTypoSlips = 1;
+
 struct Beam {
     std::vector<llama_token> toks;
     float score;
@@ -73,6 +76,7 @@ struct Engine::Impl {
     std::vector<llama_token> greedy_out;   // last Top-1 tokens (draft for the next query)
     std::vector<llama_token> prompt_toks;  // last prompt
     std::vector<float> first_logits;       // distribution of the first result token
+    std::vector<char> tab_tokens;          // tokens whose text holds a tab: the end of the Chinese field
 
     explicit Impl(const EngineOptions & o) : options(o) {
         name = std::filesystem::u8path(o.model_path).filename().u8string();
@@ -217,6 +221,14 @@ struct Engine::Impl {
         return llama_vocab_is_eog(vocab, t) || piece(t).find('\n') != std::string::npos;
     }
 
+    bool has_tab(llama_token t) {
+        if (tab_tokens.empty()) {
+            tab_tokens.resize(n_vocab);
+            for (int i = 0; i < n_vocab; ++i) tab_tokens[i] = piece(i).find('\t') != std::string::npos;
+        }
+        return tab_tokens[t];
+    }
+
     bool decode_seq0(const std::vector<llama_token> & tokens, int start, int logits_from) {
         batch.n_tokens = 0;
         for (int i = start; i < (int) tokens.size(); ++i) {
@@ -325,7 +337,9 @@ struct Engine::Impl {
 
     // Beam search over seqs 1..2*beams sharing the prompt cells of seq 0 (filled by greedy()).
     // Returns false when the deadline passes first.
-    bool beam_search(int max_new, Clock::time_point deadline, std::vector<std::pair<float, std::string>> & out) {
+    // With readings, beams end at the tab instead: the distinct Chinese fields, best first, with their tokens.
+    bool beam_search(int max_new, Clock::time_point deadline, std::vector<std::pair<float, std::string>> & out,
+                     std::vector<std::vector<llama_token>> * readings = nullptr) {
         const int B = options.beams;
         int np = (int) prompt_toks.size();
         std::vector<Beam> beams = {{{}, 0.f, -1}};
@@ -357,8 +371,16 @@ struct Engine::Impl {
             for (auto & c : cands) {
                 if (n_next >= B) break;
                 auto & t = beams[c.parent].toks;
-                if (stops(c.tok)) {
+                if (readings && has_tab(c.tok)) {
                     if (!t.empty()) {
+                        auto toks = t;
+                        toks.push_back(c.tok);
+                        finished.push_back({c.score / (float) toks.size(), toks});
+                    }
+                    continue;
+                }
+                if (stops(c.tok)) {
+                    if (!t.empty() && !readings) {
                         float score = c.score / (float) (t.size() + 1);
                         if (mode == InputMode::TranslateEn && active_strategy == "field") {
                             std::vector<std::string> pieces;
@@ -412,7 +434,63 @@ struct Engine::Impl {
         std::sort(finished.begin(), finished.end(), [](auto & a, auto & b) { return a.first > b.first; });
         out.clear();
         for (auto & [s, t] : finished) out.push_back({s, detok(t)});
+        if (readings) {
+            readings->clear();
+            for (auto & entry : finished) readings->push_back(entry.second);
+        }
         return true;
+    }
+
+    // Greedy continuations of several result prefixes at once, on seqs 1..n over the prompt cells
+    // of seq 0. A continuation still running at the deadline stays unfinished.
+    void continue_greedy(const std::vector<std::vector<llama_token>> & prefixes, int max_new, Clock::time_point deadline,
+                         std::vector<std::vector<llama_token>> & out, std::vector<char> & finished) {
+        int n = (int) prefixes.size(), np = (int) prompt_toks.size();
+        out = prefixes;
+        finished.assign(n, 0);
+        if (n == 0) return;
+        std::vector<int> active, rows;
+        batch.n_tokens = 0;
+        for (int i = 0; i < n; ++i) {
+            llama_memory_seq_rm(mem, 1 + i, -1, -1);
+            llama_memory_seq_cp(mem, 0, 1 + i, 0, np);
+            for (int k = 0; k < (int) prefixes[i].size(); ++k) {
+                int j = batch.n_tokens++;
+                batch.token[j] = prefixes[i][k];
+                batch.pos[j] = np + k;
+                batch.n_seq_id[j] = 1;
+                batch.seq_id[j][0] = 1 + i;
+                batch.logits[j] = k + 1 == (int) prefixes[i].size();
+            }
+            active.push_back(i);
+            rows.push_back(batch.n_tokens - 1);
+        }
+        bool ok = llama_decode(ctx, batch) == 0;
+        while (ok && !active.empty()) {
+            std::vector<llama_token> picks;
+            for (int row : rows) picks.push_back(argmax(llama_get_logits_ith(ctx, row)));
+            std::vector<int> next_active, next_rows;
+            batch.n_tokens = 0;
+            for (size_t k = 0; k < active.size(); ++k) {
+                int i = active[k];
+                if (stops(picks[k])) { finished[i] = 1; continue; }
+                if ((int) (out[i].size() - prefixes[i].size()) >= max_new) continue;
+                out[i].push_back(picks[k]);
+                int j = batch.n_tokens++;
+                batch.token[j] = picks[k];
+                batch.pos[j] = np + (int) out[i].size() - 1;
+                batch.n_seq_id[j] = 1;
+                batch.seq_id[j][0] = 1 + i;
+                batch.logits[j] = true;
+                next_active.push_back(i);
+                next_rows.push_back(j);
+            }
+            if (next_active.empty() || Clock::now() > deadline) break;
+            ok = llama_decode(ctx, batch) == 0;
+            active.swap(next_active);
+            rows.swap(next_rows);
+        }
+        for (int i = 0; i < n; ++i) llama_memory_seq_rm(mem, 1 + i, -1, -1);
     }
 };
 
@@ -444,7 +522,8 @@ bool Engine::set_translate_adapter(const std::string & path, std::string & error
     length = llama_adapter_meta_val_str(next, "beam.decoding_strategy", value, sizeof(value));
     if (length >= (int) sizeof(value)) { llama_adapter_lora_free(next); error = "translate_adapter_strategy_unsupported"; return false; }
     if (length > 0) strategy.assign(value, length);
-    if (strategy != "beam" && strategy != "greedy_first" && strategy != "field") {
+    if (!m.options.translate_strategy.empty()) strategy = m.options.translate_strategy;
+    if (strategy != "beam" && strategy != "greedy_first" && strategy != "field" && strategy != "diverse") {
         llama_adapter_lora_free(next); error = "translate_adapter_strategy_unsupported"; return false;
     }
     if (!m.pronunciation) {
@@ -506,15 +585,71 @@ QueryResult Engine::query(const std::string & raw_keys, const std::string & cont
     if (!m.greedy(prompt, max_new)) return result;
     result.greedy_ms = ms_since(t0);
     std::string top = m.detok(m.greedy_out);
+    std::map<std::string, std::optional<TaskCandidate>> parsed_texts;  // the same text is looked at several times
     auto parse = [&](const std::string & text) {
+        auto known = parsed_texts.find(text);
+        if (known != parsed_texts.end()) return known->second;
         auto parsed = parse_candidate(text, keys, options.mode, m.active_version);
-        if (parsed && options.mode == InputMode::TranslateEn && m.pronunciation && m.pronunciation->align(parsed->comment, keys).empty())
-            return std::optional<TaskCandidate>{};
-        return parsed;
+        if (parsed && options.mode == InputMode::TranslateEn && m.pronunciation && !m.pronunciation->spells(parsed->comment, keys, kTypoSlips))
+            parsed.reset();
+        return parsed_texts[text] = parsed;
     };
 
     std::vector<std::string> ranked, folded;
-    if (options.beam_budget_ms > 0 && options.max_candidates > 1) {
+    bool diverse = options.mode == InputMode::TranslateEn && m.active_strategy == "diverse";
+    if (diverse && options.beam_budget_ms > 0 && options.max_candidates > 1) {
+        // Distinct Chinese readings from a beam over the Chinese field, then each one's English.
+        auto t1 = Clock::now();
+        auto deadline = t1 + std::chrono::milliseconds(options.beam_budget_ms);
+        std::vector<std::pair<float, std::string>> fin;
+        std::vector<std::vector<llama_token>> readings, prefixes, texts;
+        if (m.beam_search(output_budget(InputMode::Ime, letter_count(keys)), deadline, fin, &readings)) {
+            std::vector<std::string> seen;
+            for (auto & tokens : readings) {
+                std::string text = m.detok(tokens);
+                std::string chinese = text.substr(0, text.find('\t'));
+                if (chinese.empty() || std::find(seen.begin(), seen.end(), chinese) != seen.end()) continue;
+                if (m.pronunciation && !m.pronunciation->spells(chinese, keys, kTypoSlips)) continue;
+                seen.push_back(chinese);
+                prefixes.push_back(tokens);
+                if ((int) prefixes.size() >= options.max_candidates) break;
+            }
+            // The Top-1 already continued its own reading.
+            std::vector<std::vector<llama_token>> todo;
+            std::vector<int> slot(prefixes.size(), -1);
+            for (size_t i = 0; i < prefixes.size(); ++i) {
+                bool covered = m.greedy_finished && m.greedy_out.size() >= prefixes[i].size() &&
+                               std::equal(prefixes[i].begin(), prefixes[i].end(), m.greedy_out.begin());
+                if (!covered) { slot[i] = (int) todo.size(); todo.push_back(prefixes[i]); }
+            }
+            std::vector<char> done;
+            m.continue_greedy(todo, max_new, deadline, texts, done);
+            for (size_t i = 0; i < prefixes.size() && (int) ranked.size() < options.max_candidates; ++i) {
+                if (slot[i] >= 0 && !done[slot[i]]) continue;
+                std::string text = slot[i] < 0 ? top : m.detok(texts[slot[i]]);
+                auto parsed = parse(text);
+                std::string f = parsed ? translation_key(parsed->text) : "";
+                if (parsed && std::find(folded.begin(), folded.end(), f) == folded.end()) {
+                    ranked.push_back(text);
+                    folded.push_back(f);
+                }
+            }
+            result.beam_complete = true;
+            // Few readings (full spellings mostly): the remaining places go to the ordinary beam's English.
+            if ((int) ranked.size() < options.max_candidates && m.beam_search(max_new, deadline, fin)) {
+                for (auto & [score, text] : fin) {
+                    if ((int) ranked.size() >= options.max_candidates) break;
+                    auto parsed = parse(text);
+                    std::string f = parsed ? translation_key(parsed->text) : "";
+                    if (parsed && std::find(folded.begin(), folded.end(), f) == folded.end()) {
+                        ranked.push_back(text);
+                        folded.push_back(f);
+                    }
+                }
+            }
+        }
+        result.beam_ms = ms_since(t1);
+    } else if (options.beam_budget_ms > 0 && options.max_candidates > 1) {
         auto t1 = Clock::now();
         std::vector<std::pair<float, std::string>> fin;
         if (m.beam_search(max_new, t1 + std::chrono::milliseconds(options.beam_budget_ms), fin)) {

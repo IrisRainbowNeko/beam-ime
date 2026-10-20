@@ -21,6 +21,8 @@ struct EngineOptions {
     // Load the weights into writable memory (no mmap) so a translation adapter can be folded
     // into them. Set it when a translate adapter is going to be used and merging is wanted.
     bool writable_weights = false;
+    // Overrides the translate adapter's beam.decoding_strategy ("diverse": one English per distinct Chinese reading).
+    std::string translate_strategy;
 };
 
 struct QueryOptions {

@@ -17,6 +17,9 @@ class Pronunciations {
  public:
     explicit Pronunciations(const std::filesystem::path & path);
     std::vector<size_t> align(const std::string & text, const std::string & keys) const;
+    // align(), or the keys spell text with up to max_edits slips (one substituted, missing, extra or
+    // swapped letter), each inside a syllable typed with two or more letters.
+    bool spells(const std::string & text, const std::string & keys, int max_edits) const;
     std::pair<std::string, std::string> codes(const std::string & text, const std::string & keys) const;
     std::vector<std::string> syllables(const std::string & text, const std::string & keys) const;
  private:
