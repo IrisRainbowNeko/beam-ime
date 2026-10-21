@@ -66,6 +66,10 @@ std::filesystem::path learning_data_directory() {
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", value, 32768);
     if (!n || n >= 32768) throw std::runtime_error("LOCALAPPDATA is unavailable");
     return std::filesystem::path(value) / "beam-ime" / "learning";
+#elif defined(__APPLE__)
+    const char * home = std::getenv("HOME");
+    if (!home) throw std::runtime_error("HOME is unavailable");
+    return std::filesystem::path(home) / "Library/Application Support/beam-ime/learning";
 #else
     if (const char * value = std::getenv("XDG_DATA_HOME")) return std::filesystem::path(value) / "beam-ime/learning";
     const char * home = std::getenv("HOME");

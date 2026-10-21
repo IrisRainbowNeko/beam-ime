@@ -1,0 +1,47 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Runs as root after the payload is in /Library/Application Support/Beam (and, when it was
+# missing or older, after Squirrel 1.1.2 was installed by the same package).
+set -euo pipefail
+
+BEAM="/Library/Application Support/Beam"
+APP="/Library/Input Methods/Squirrel.app"
+PLUGINS="$APP/Contents/Frameworks/rime-plugins"
+LOCK="$BEAM/share/beam-ime/dependencies.lock.json"
+mkdir -p /Library/Logs/Beam
+exec >> /Library/Logs/Beam/install.log 2>&1
+echo "== $(date) Beam $(cat "$BEAM/share/beam-ime/VERSION")"
+
+sha() { /usr/bin/shasum -a 256 "$1" | cut -d ' ' -f 1; }
+
+# The plugin is built against this exact librime; any other build would load it with a
+# mismatched C++ ABI, so refuse before touching Squirrel.
+want=$(/usr/bin/plutil -extract squirrel.librimeSha256 raw -o - "$LOCK")
+have=$(sha "$APP/Contents/Frameworks/librime.1.dylib")
+if [ "$want" != "$have" ]; then
+    echo "Squirrel's librime is $have, expected $want (Squirrel $(/usr/bin/plutil -extract squirrel.version raw -o - "$LOCK"))"
+    exit 1
+fi
+
+# Keep the vendor-signed app once, before Beam changes it, so uninstall can put it back.
+if [ ! -e "$PLUGINS/librime-beam.dylib" ]; then
+    rm -rf "$BEAM/backup"
+    mkdir -p "$BEAM/backup"
+    /usr/bin/ditto "$APP" "$BEAM/backup/Squirrel.app"
+fi
+/usr/bin/killall Squirrel 2>/dev/null || true
+/usr/bin/ditto "$BEAM/lib/beam-ime/rime-plugins/librime-beam.dylib" "$PLUGINS/librime-beam.dylib"
+# Adding a file breaks the vendor seal; re-sign ad hoc and keep the entitlements (no sandbox,
+# library validation off) and the hardened-runtime flag.
+/usr/bin/codesign --force --sign - --preserve-metadata=entitlements,flags "$APP"
+/usr/bin/codesign --verify --strict "$APP"
+
+user=$(/usr/bin/stat -f %Su /dev/console)
+if [ -n "$user" ] && [ "$user" != root ] && [ "$user" != loginwindow ]; then
+    uid=$(/usr/bin/id -u "$user")
+    /bin/launchctl asuser "$uid" /usr/bin/sudo -u "$user" -H "$BEAM/bin/beamctl" setup \
+        || echo "beamctl setup failed for $user; run it again from Terminal"
+else
+    echo "no desktop user is logged in; each user runs '$BEAM/bin/beamctl setup' once"
+fi
+exit 0

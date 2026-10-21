@@ -11,5 +11,8 @@
   "SPIRV-Headers": {"revision": "2a611a970fdbc41ac2e3e328802aed9985352dca", "source": "https://github.com/KhronosGroup/SPIRV-Headers"},
   "rime-ice": {"revision": "6810e8916d160498620a16fef2135956fecbd485", "sha256": "5e83281482af949fef9e34fb034432f874ec47d537a11f7210cce2965e35960c", "url": "https://codeload.github.com/iDvel/rime-ice/tar.gz/6810e8916d160498620a16fef2135956fecbd485"},
   "weasel": {"version": "0.17.4.0", "sha256": "cf509534a8f5f8af9c98ed7cbb8f135439f145a8cbe7e50ede42bb5b5ab45c29", "url": "https://github.com/rime/weasel/releases/download/0.17.4/weasel-0.17.4.0-installer.exe"},
+  "squirrel": {"version": "1.1.2", "url": "https://github.com/rime/squirrel/releases/download/1.1.2/Squirrel-1.1.2.pkg", "sha256": "614746013212937623d5bbab9901e9c43d1ec937aa32307d6b6092a05e308287", "librimeSha256": "abb06aa5b3f53de375bc401512b49a7a31b7ed5ee62b2ef7a438512abee5958f"},
+  "macos-librime": {"version": "1.16.0", "revision": "a251145d3aafa33871824a40bbec04c966bd8b56", "source": "https://github.com/rime/librime"},
+  "boost-headers-macos": {"version": "1.89.0", "url": "https://archives.boost.io/release/1.89.0/source/boost_1_89_0.tar.gz", "sha256": "9de758db755e8330a01d995b0a24d09798048400ac25c03fc5ea9be364b13c93"},
   "nsis": {"version": "3.11", "sha256": "c7d27f780ddb6cffb4730138cd1591e841f4b7edb155856901cdf5f214394fa1"}
 }

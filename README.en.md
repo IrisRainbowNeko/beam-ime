@@ -20,6 +20,9 @@ candidates are shown for that key. All candidates in the figure are measured.
   run `beamctl setup`, redeploy Rime and choose Beam.
 - Windows: run the light or offline installer. It installs the compatible
   Weasel version when needed. The offline installer includes the model.
+- macOS (preview, Apple silicon): the package installs Squirrel 1.1.2 when needed, adds the
+  Beam plugin and uses Metal. Personal learning is not available there yet; see
+  [macOS installation (Chinese)](docs/install-macos.md).
 - The model runs locally through llama.cpp with an optional Vulkan backend and
   a CPU fallback. Context is limited to text committed in the current Rime session.
 

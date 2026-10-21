@@ -65,3 +65,33 @@ jobs:
       - run: dnf -y --setopt=install_weak_deps=False install ./dist/*.rpm && beamd --version && beamctl doctor
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with: {name: fedora-package, path: 'dist/*'}
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: brew install ninja nlohmann-json
+      - run: python3 -m pip install --break-system-packages pypinyin==0.55.0 PyYAML==6.0.2
+      - run: bash packaging/macos/build.sh deps build package
+      - name: Package contents
+        run: |
+          pkgutil --expand-full dist/Beam-*-macos-arm64.pkg /tmp/beam-pkg
+          beam="/tmp/beam-pkg/beam.pkg/Payload/Library/Application Support/Beam"
+          "$beam/bin/beamd" --version
+          bash -n "$beam/bin/beamctl"
+          codesign --verify --strict "$beam/lib/beam-ime/rime-plugins/librime-beam.dylib"
+          otool -L "$beam/lib/beam-ime/rime-plugins/librime-beam.dylib"
+      - name: Install, check and uninstall
+        run: |
+          sudo installer -pkg dist/Beam-*-macos-arm64.pkg -target / || { cat /Library/Logs/Beam/install.log; exit 1; }
+          cat /Library/Logs/Beam/install.log
+          codesign --verify --strict --verbose "/Library/Input Methods/Squirrel.app"
+          codesign -d --entitlements - "/Library/Input Methods/Squirrel.app"
+          ls "/Library/Input Methods/Squirrel.app/Contents/Frameworks/rime-plugins"
+          "/Library/Application Support/Beam/bin/beamctl" doctor || true
+          sudo "/Library/Application Support/Beam/bin/beamctl" uninstall
+          test ! -e "/Library/Application Support/Beam"
+          test ! -e "/Library/Input Methods/Squirrel.app/Contents/Frameworks/rime-plugins/librime-beam.dylib"
+          codesign --verify --strict "/Library/Input Methods/Squirrel.app"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with: {name: macos-package, path: 'dist/*'}

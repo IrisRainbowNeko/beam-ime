@@ -58,9 +58,18 @@ class RimeTranslationTest(unittest.TestCase):
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
         build = Path(os.environ['BEAM_TEST_RIME_BUILD'])
-        libdir = Path(subprocess.check_output(['pkg-config', '--variable=libdir', 'rime'], text=True).strip())
-        plugins = self.root / 'plugins'; plugins.mkdir()
-        shutil.copy2(build / 'bin/librime-beam.so', plugins)
+        frameworks = os.environ.get('BEAM_TEST_RIME_FRAMEWORKS')
+        if frameworks:
+            # macOS: librime loads rime-plugins/ beside itself, so lay out a private copy of
+            # Squirrel's librime with the plugin; rime_smoke resolves librime via @executable_path.
+            host = self.root / 'Frameworks'; (host / 'rime-plugins').mkdir(parents=True)
+            shutil.copy2(Path(frameworks) / 'librime.1.dylib', host)
+            shutil.copy2(build / 'bin/librime-beam.dylib', host / 'rime-plugins')
+            shutil.copy2(build / 'bin/rime_smoke', host)
+        else:
+            libdir = Path(subprocess.check_output(['pkg-config', '--variable=libdir', 'rime'], text=True).strip())
+            plugins = self.root / 'plugins'; plugins.mkdir()
+            shutil.copy2(build / 'bin/librime-beam.so', plugins)
         user = self.root / 'rime'; user.mkdir()
         (user / 'default.yaml').write_text('config_version: "1"\nschema_list:\n  - schema: beam_test\n', encoding='utf-8')
         (user / 'beam_test.schema.yaml').write_text('''schema:
@@ -87,9 +96,12 @@ beam:
   translate_beam_ms: 0
 ''', encoding='utf-8')
         (user / 'beam_test.dict.yaml').write_text('---\nname: beam_test\nversion: "1"\nsort: original\n...\n你\tni\t100\n好\thao\t100\n你好\tni hao\t100\n', encoding='utf-8')
-        self.command = ['bwrap', '--ro-bind', '/', '/', '--bind', str(self.root), str(self.root),
-                        '--ro-bind', str(plugins), str(libdir / 'rime-plugins'),
-                        str(build / 'bin/rime_smoke'), str(user), 'beam_test']
+        if frameworks:
+            self.command = [str(host / 'rime_smoke'), str(user), 'beam_test']
+        else:
+            self.command = ['bwrap', '--ro-bind', '/', '/', '--bind', str(self.root), str(self.root),
+                            '--ro-bind', str(plugins), str(libdir / 'rime-plugins'),
+                            str(build / 'bin/rime_smoke'), str(user), 'beam_test']
         self.env = {**os.environ, 'BEAM_SOCKET': str(endpoint), 'GLOG_log_dir': str(self.root)}
 
     def tearDown(self):

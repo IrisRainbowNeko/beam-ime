@@ -11,6 +11,7 @@ Binary packages include this file and the texts under `licenses/`.
 | Lua | MIT | https://www.lua.org/ |
 | rime-ice | GPL-3.0 | https://github.com/iDvel/rime-ice |
 | Weasel | GPL-3.0 | https://github.com/rime/weasel/tree/0.17.4 |
+| Squirrel | GPL-3.0 | https://github.com/rime/squirrel/tree/1.1.2 |
 | nlohmann/json | MIT | https://github.com/nlohmann/json |
 | Boost | BSL-1.0 | https://www.boost.org/ |
 | glog | BSD-3-Clause | https://github.com/google/glog |
@@ -34,6 +35,10 @@ and source link. Beam's schema adds its processor and translator to that scheme.
 The offline Windows installer carries the original Weasel installer; the merged
 `rime.dll` is built by the scripts in this repository. Weasel source is available
 at the tag above, including its build instructions and submodule references.
+The macOS installer carries the official, unmodified Squirrel 1.1.2 package. After
+installation it adds Beam's Rime plugin to `Squirrel.app` and re-signs the app ad hoc;
+the plugin is built against the librime shipped in that package (source at the
+revision in `dependencies.lock.json`). Squirrel source is available at the tag above.
 
 The released model is a Qwen3-0.6B-Base fine-tune. Its model card and original
 base-model attribution are in `docs/models/model-card.md`. Do not interpret the

@@ -1,7 +1,8 @@
 // Local transport between beamd and its clients.
 //
 // Linux/macOS: a user-private AF_UNIX stream socket ($BEAM_SOCKET, else
-//   $XDG_RUNTIME_DIR/beam-ime/beamd.sock); the server checks the peer's uid.
+//   $XDG_RUNTIME_DIR/beam-ime/beamd.sock on Linux, the per-user temporary directory
+//   (getconf DARWIN_USER_TEMP_DIR)/beam-ime/beamd.sock on macOS); the server checks the peer's uid.
 // Windows: loopback TCP on a random port. beamd writes {"port":N,"token":"..."} to
 //   %LOCALAPPDATA%\beam-ime\beamd.endpoint (user-private by the profile ACL); every request
 //   carries the token, so other local users cannot query the model.

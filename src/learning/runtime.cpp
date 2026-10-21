@@ -12,7 +12,11 @@
 #include <windows.h>
 #include <bcrypt.h>
 #else
+#ifdef __APPLE__
+#include <CommonCrypto/CommonDigest.h>
+#else
 #include <openssl/evp.h>
+#endif
 #include <spawn.h>
 #include <fcntl.h>
 #include <sys/wait.h>
@@ -58,6 +62,12 @@ std::string sha256(const std::filesystem::path & path) {
         if (BCryptHashData(hash, reinterpret_cast<PUCHAR>(buffer.data()), (ULONG)stream.gcount(), 0) != 0) { ok = false; break; }
     ok = ok && BCryptFinishHash(hash, digest.data(), (ULONG)digest.size(), 0) == 0;
     BCryptDestroyHash(hash); BCryptCloseAlgorithmProvider(algorithm, 0);
+#elif defined(__APPLE__)
+    CC_SHA256_CTX hash;
+    bool ok = CC_SHA256_Init(&hash) == 1;
+    while (stream.read(buffer.data(), buffer.size()) || stream.gcount())
+        if (CC_SHA256_Update(&hash, buffer.data(), (CC_LONG)stream.gcount()) != 1) { ok = false; break; }
+    ok = CC_SHA256_Final(digest.data(), &hash) == 1 && ok;
 #else
     EVP_MD_CTX * hash = EVP_MD_CTX_new();
     if (!hash) throw std::runtime_error("SHA256 init failed");

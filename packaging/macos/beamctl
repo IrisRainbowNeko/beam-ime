@@ -1,0 +1,273 @@
+#!/bin/bash
+# SPDX-License-Identifier: Apache-2.0
+# Configure a macOS Beam installation, query it, or install its model.
+#
+#   beamctl setup [--cpu]      install Beam 雾凇 into ~/Library/Rime and start the launchd agent
+#   beamctl disable            stop the agent and restore the Rime files Beam installed
+#   beamctl model-install --download | --source DIR
+#   beamctl run                (launchd agent) fetch the model if needed, then run beamd
+#   beamctl doctor | query KEYS
+#   sudo beamctl uninstall     also restore the original Squirrel.app and remove Beam
+#
+# macOS ships no Python, so this is plain bash 3.2 with the system tools (plutil, shasum, curl).
+set -euo pipefail
+# System tools first, so Homebrew's GNU versions never stand in for the BSD ones used here.
+PATH=/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}
+
+self=$0
+while [ -L "$self" ]; do self=$(readlink "$self"); done
+ROOT=$(cd "$(dirname "$self")/.." && pwd)
+SHARE=$ROOT/share/beam-ime
+MANIFEST=$SHARE/models/default.json
+DATA=$HOME/Library/Application\ Support/beam-ime
+RIME=$HOME/Library/Rime
+LOGS=$HOME/Library/Logs/beam-ime
+LABEL=io.github.irisrainbowneko.beam-ime
+AGENT=$HOME/Library/LaunchAgents/$LABEL.plist
+SQUIRREL=/Library/Input\ Methods/Squirrel.app
+MARKER='# Beam IME'
+
+die() { echo "beamctl: $*" >&2; exit 1; }
+field() { /usr/bin/plutil -extract "$1" raw -o - "$MANIFEST"; }
+sha() { shasum -a 256 "$1" | cut -d ' ' -f 1; }
+socket_path() { echo "$(getconf DARWIN_USER_TEMP_DIR)beam-ime/beamd.sock"; }
+not_root() { [ "$(id -u)" != 0 ] || die "run this command as your desktop user, without sudo"; }
+
+# fetch PREFIX DEST [SOURCE_DIR]: install the manifest entry at PREFIX ("" = base model) to DEST.
+fetch() {
+    local prefix=$1 dest=$2 source=${3:-} url size digest name part
+    name=$(field "${prefix}filename"); url=$(field "${prefix}url")
+    size=$(field "${prefix}size"); digest=$(field "${prefix}sha256")
+    if [ -f "$dest" ] && [ "$(stat -f %z "$dest")" = "$size" ] && [ "$(sha "$dest")" = "$digest" ]; then return 0; fi
+    mkdir -p "$(dirname "$dest")"
+    part="$dest.part"
+    if [ -n "$source" ]; then
+        cp "$source/$name" "$part"
+    else
+        case $url in https://*) ;; *) die "refusing a non-HTTPS model URL" ;; esac
+        echo "downloading $name ($((size / 1048576)) MiB)" >&2
+        /usr/bin/curl -fL --proto '=https' --proto-redir '=https' --retry 3 --max-filesize "$size" -o "$part" "$url"
+    fi
+    if [ "$(stat -f %z "$part")" != "$size" ] || [ "$(sha "$part")" != "$digest" ]; then
+        rm -f "$part"; die "$name: size or SHA-256 mismatch"
+    fi
+    mv -f "$part" "$dest"
+}
+
+# The offline package carries both files under share/; otherwise they live in the user's data.
+model_path() {
+    local name; name=$(field filename)
+    if [ -f "$SHARE/models/$name" ]; then echo "$SHARE/models/$name"; else echo "$DATA/models/$name"; fi
+}
+
+model_install() {
+    local source=""
+    case ${1:-} in
+        --download) ;;
+        --source) source=${2:?--source needs a directory} ;;
+        *) die "use --download, or --source DIR with the model files" ;;
+    esac
+    local model; model=$(model_path)
+    case $model in "$SHARE"/*) echo "$model"; return 0 ;; esac
+    fetch "" "$model" "$source"
+    fetch translateAdapter. "$(dirname "$model")/$(field translateAdapter.installAs)" "$source"
+    echo "$model"
+}
+
+# managed copies: DATA/installed-files/files.tsv holds "target<TAB>installed sha<TAB>backup|-".
+install_file() {
+    local source=$1 target=$2 state=$DATA/installed-files record current backup
+    mkdir -p "$state" "$(dirname "$target")"; touch "$state/files.tsv"
+    record=$(awk -F '\t' -v t="$target" '$1 == t' "$state/files.tsv")
+    if [ -n "$record" ]; then
+        # Changed by the user since Beam installed it: leave it alone.
+        if [ -f "$target" ] && [ "$(sha "$target")" != "$(echo "$record" | cut -f 2)" ]; then return 0; fi
+        backup=$(echo "$record" | cut -f 3)
+    else
+        backup=-
+        if [ -e "$target" ]; then backup="$state/$(uuidgen).bak"; cp -p "$target" "$backup"; fi
+    fi
+    cp "$source" "$target.beam-new" && mv -f "$target.beam-new" "$target"
+    current=$(sha "$target")
+    awk -F '\t' -v t="$target" '$1 != t' "$state/files.tsv" > "$state/files.tsv.new"
+    printf '%s\t%s\t%s\n' "$target" "$current" "$backup" >> "$state/files.tsv.new"
+    mv -f "$state/files.tsv.new" "$state/files.tsv"
+}
+
+restore_files() {
+    local state=$DATA/installed-files target installed backup
+    [ -f "$state/files.tsv" ] || return 0
+    while IFS="$(printf '\t')" read -r target installed backup; do
+        [ -n "$target" ] || continue
+        if [ -f "$target" ] && [ "$(sha "$target")" != "$installed" ]; then continue; fi
+        if [ "$backup" != - ] && [ -f "$backup" ]; then cp -p "$backup" "$target"; else rm -f "$target"; fi
+    done < "$state/files.tsv"
+    mv -f "$state/files.tsv" "$state/restored-files.tsv"
+}
+
+# Add or remove "- schema: beam_ice" in default.custom.yaml, like the Windows installer.
+schema_entry() {
+    local path=$RIME/default.custom.yaml enable=$1
+    if [ "$enable" = 1 ]; then
+        [ -s "$path" ] || printf 'patch:\n' > "$path"
+        grep -Eq '^[^#]*schema:[[:space:]]*beam_ice' "$path" && return 0
+        [ -f "$path.beam-backup" ] || cp -p "$path" "$path.beam-backup"
+        awk -v marker="$MARKER" '
+            { line[NR] = $0 }
+            END {
+                for (i = 1; i <= NR; i++) {
+                    if (!list && line[i] ~ /^[[:space:]]+schema_list[[:space:]]*:[[:space:]]*(#.*)?$/) list = i
+                    if (line[i] ~ /^patch[[:space:]]*:[[:space:]]*(#.*)?$/) patch = i
+                    if (line[i] ~ /schema_list\/@before 0/) before = 1
+                }
+                if (list) {
+                    match(line[list], /^[[:space:]]*/); indent = substr(line[list], 1, RLENGTH) "  "
+                    for (j = list + 1; j <= NR; j++) {
+                        if (line[j] ~ /^[[:space:]]*-/) { match(line[j], /^[[:space:]]*/); indent = substr(line[j], 1, RLENGTH); break }
+                        if (line[j] ~ /^[[:space:]]*[^[:space:]#]/) break
+                    }
+                    at = list; text = indent "- schema: beam_ice  " marker
+                } else if (patch) {
+                    if (before) { print "schema_list/@before 0 already exists; add beam_ice manually" > "/dev/stderr"; exit 3 }
+                    for (at = patch; at + 1 <= NR && (line[at + 1] ~ /^[[:space:]]/ || line[at + 1] ~ /^[[:space:]]*(#.*)?$/); at++) {}
+                    text = "  \"schema_list/@before 0\": { schema: beam_ice }  " marker
+                } else { print "unsupported default.custom.yaml; add beam_ice to its schema list manually" > "/dev/stderr"; exit 3 }
+                for (i = 1; i <= NR; i++) { print line[i]; if (i == at) print text }
+            }' "$path" > "$path.beam-new" || { rm -f "$path.beam-new"; return 1; }
+        mv -f "$path.beam-new" "$path"
+    elif [ -f "$path" ]; then
+        grep -q "$MARKER\$" "$path" || return 0
+        grep -v "$MARKER\$" "$path" > "$path.beam-new" || true
+        mv -f "$path.beam-new" "$path"
+    fi
+}
+
+agent_start() {
+    local domain=gui/$(id -u)
+    /bin/launchctl bootout "$domain/$LABEL" 2>/dev/null || true
+    /bin/launchctl bootstrap "$domain" "$AGENT" 2>/dev/null \
+        || echo "beamctl: the agent starts at your next login (launchctl bootstrap failed here)" >&2
+}
+
+redeploy() {
+    # Squirrel picks up the new schema; it rebuilds the dictionaries on its next start otherwise.
+    [ -x "$SQUIRREL/Contents/MacOS/Squirrel" ] && "$SQUIRREL/Contents/MacOS/Squirrel" --reload 2>/dev/null || true
+}
+
+setup() {
+    not_root
+    local cpu=0 source file
+    [ "${1:-}" = --cpu ] && cpu=1
+    [ -d "$SQUIRREL" ] || die "Squirrel is not installed in /Library/Input Methods"
+    [ -f "$SQUIRREL/Contents/Frameworks/rime-plugins/librime-beam.dylib" ] \
+        || die "the Beam plugin is missing from Squirrel.app; reinstall the Beam package"
+    mkdir -p "$DATA" "$LOGS" "$RIME" "$(dirname "$AGENT")"
+    source=$SHARE/rime-data
+    (cd "$source" && find . -type f) | while IFS= read -r file; do
+        install_file "$source/${file#./}" "$RIME/${file#./}"
+    done
+    install_file "$SHARE/rime/beam_ice.schema.yaml" "$RIME/beam_ice.schema.yaml"
+    schema_entry 1 || { restore_files; die "could not add beam_ice to default.custom.yaml"; }
+    echo "cpu=$cpu" > "$DATA/settings"
+    cat > "$AGENT.beam-new" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$LABEL</string>
+  <key>ProgramArguments</key><array><string>$ROOT/bin/beamctl</string><string>run</string></array>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <!-- Typing latency: no App Nap or background CPU/GPU throttling. -->
+  <key>ProcessType</key><string>Interactive</string>
+  <key>StandardOutPath</key><string>$LOGS/agent.log</string>
+  <key>StandardErrorPath</key><string>$LOGS/agent.log</string>
+</dict>
+</plist>
+PLIST
+    /usr/bin/plutil -lint -s "$AGENT.beam-new" && mv -f "$AGENT.beam-new" "$AGENT"
+    agent_start
+    redeploy
+    echo "Beam enabled. The model downloads in the background on first start (see $LOGS/agent.log);"
+    echo "until then Squirrel shows rime-ice candidates. Choose Beam 雾凇 in Squirrel's schema menu."
+}
+
+disable() {
+    not_root
+    /bin/launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    rm -f "$AGENT"
+    schema_entry 0
+    restore_files
+    redeploy
+    echo "Beam disabled. Models and user dictionaries were kept."
+}
+
+run() {
+    local model cpu=0 attempt code child
+    mkdir -p "$LOGS"
+    [ -f "$DATA/settings" ] && grep -q '^cpu=1' "$DATA/settings" && cpu=1
+    model=$(model_install --download) || { echo "model download failed; retrying later" >&2; sleep 60; exit 1; }
+    for attempt in 1 2 3; do
+        "$ROOT/bin/beamd" --model "$model" --log "$LOGS/beamd.log" --ngl "$([ $cpu = 1 ] && echo 0 || echo 99)" &
+        child=$!
+        trap 'kill -TERM "$child" 2>/dev/null; trap - TERM INT' TERM INT
+        code=0; wait "$child" || code=$?
+        while kill -0 "$child" 2>/dev/null; do code=0; wait "$child" || code=$?; done
+        trap - TERM INT
+        case $code in 0|2|143) exit 0 ;; 4) exit 0 ;; esac  # 4: another beamd already answers
+        cpu=1  # a crash is most likely the GPU path; retry on the CPU
+    done
+    exit 1
+}
+
+request() {
+    local sock; sock=$(socket_path)
+    [ -S "$sock" ] || { echo '{"ok":false,"error":"unavailable"}'; return 0; }
+    printf '%s\n' "$1" | /usr/bin/nc -U -w 3 "$sock" | head -n 1
+}
+
+doctor() {
+    local version plugin=false signed=false model=false
+    version=$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$SQUIRREL/Contents/Info.plist" 2>/dev/null || echo missing)
+    [ -f "$SQUIRREL/Contents/Frameworks/rime-plugins/librime-beam.dylib" ] && plugin=true
+    /usr/bin/codesign --verify --strict "$SQUIRREL" 2>/dev/null && signed=true
+    [ -f "$(model_path)" ] && model=true
+    printf '{"version":"%s","squirrel":"%s","plugin":%s,"squirrelSignatureValid":%s,"modelInstalled":%s,"agent":%s,\n "service":%s}\n' \
+        "$(cat "$SHARE/VERSION" 2>/dev/null || echo unknown)" "$version" "$plugin" "$signed" "$model" \
+        "$([ -f "$AGENT" ] && echo true || echo false)" "$(request '{"id":1,"op":"health"}')"
+}
+
+uninstall() {
+    [ "$(id -u)" = 0 ] || die "uninstall changes /Library; run it with sudo"
+    [ "$ROOT" = "/Library/Application Support/Beam" ] || die "uninstall only removes the installed copy, not $ROOT"
+    local user backup=$ROOT/backup/Squirrel.app
+    user=$(/usr/bin/stat -f %Su /dev/console)
+    if [ -n "$user" ] && [ "$user" != root ]; then
+        /bin/launchctl asuser "$(id -u "$user")" /usr/bin/sudo -u "$user" -H "$ROOT/bin/beamctl" disable || true
+    fi
+    if [ -d "$backup" ] && [ -f "$SQUIRREL/Contents/Frameworks/rime-plugins/librime-beam.dylib" ]; then
+        /usr/bin/killall Squirrel 2>/dev/null || true
+        rm -rf "$SQUIRREL" && /usr/bin/ditto "$backup" "$SQUIRREL"
+    fi
+    /usr/sbin/pkgutil --forget "$LABEL" >/dev/null 2>&1 || true
+    rm -rf "$ROOT"
+    echo "Beam removed; Squirrel was restored. Models and learning data are kept in ~/Library/Application Support/beam-ime."
+}
+
+# Tests source this file for its functions.
+[ "${BEAM_BEAMCTL_SOURCE_ONLY:-}" = 1 ] && return 0
+
+command=${1:-}
+[ $# -gt 0 ] && shift
+case $command in
+    setup) setup "$@" ;;
+    disable) disable ;;
+    model-install) not_root; model_install "$@" ;;
+    run) run ;;
+    doctor) doctor ;;
+    query) request "{\"id\":1,\"op\":\"query\",\"keys\":\"${1:?keys}\",\"beam_ms\":100}" ;;
+    uninstall) uninstall ;;
+    learn) die "personal learning is not available on macOS yet" ;;
+    *) sed -n '3,10p' "$self" >&2; exit 2 ;;
+esac

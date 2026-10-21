@@ -248,6 +248,17 @@ long recv_some(Socket s, char * data, std::size_t size) {
 
 std::string default_location() {
     if (const char * p = std::getenv("BEAM_SOCKET"); p && *p) return p;
+#ifdef __APPLE__
+    // The per-user temporary directory (/var/folders/.../T/) is the same for the input method,
+    // the launchd agent and a terminal, whatever their environment.
+    char temporary[1024];
+    size_t length = confstr(_CS_DARWIN_USER_TEMP_DIR, temporary, sizeof(temporary));
+    if (length > 0 && length <= sizeof(temporary)) {
+        std::string dir(temporary);
+        if (dir.back() != '/') dir += '/';
+        return dir + "beam-ime/beamd.sock";
+    }
+#endif
     if (const char * r = std::getenv("XDG_RUNTIME_DIR"); r && *r) return std::string(r) + "/beam-ime/beamd.sock";
     return "/tmp/beam-ime-" + std::to_string(getuid()) + "/beamd.sock";
 }

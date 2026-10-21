@@ -35,6 +35,9 @@
 #else
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 
 using json = nlohmann::json;
 
@@ -132,6 +135,12 @@ int beamd_main(int argc, char ** argv) {
         wchar_t module[32768];
         DWORD length = GetModuleFileNameW(nullptr, module, 32768);
         executable = std::filesystem::path(std::wstring(module, length));
+#elif defined(__APPLE__)
+        char module[4096];
+        uint32_t length = sizeof(module);
+        std::error_code ec;
+        executable = _NSGetExecutablePath(module, &length) == 0 ? std::filesystem::weakly_canonical(module, ec)
+                                                               : std::filesystem::absolute(argv[0]);
 #else
         std::error_code ec;
         executable = std::filesystem::read_symlink("/proc/self/exe", ec);

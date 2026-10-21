@@ -15,5 +15,15 @@
   "learning": {
     "linux-x86_64": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-learning-0.2.0-linux-x86_64-vulkan.json",
     "windows-x86_64": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/v0.2.0/beam-learning-0.2.0-windows-x86_64-vulkan.json"
+  },
+  "translateAdapter": {
+    "id": "translate-en-v1",
+    "filename": "beam-translate-en-v1.gguf",
+    "installAs": "beam-translate.gguf",
+    "promptVersion": "keys_llm_v4",
+    "modes": ["translate_en"],
+    "size": 161508160,
+    "sha256": "43dce25ecf83b08254b5c8bbce56192a2c46763128b5b22f5809c3222b71ab90",
+    "url": "https://github.com/IrisRainbowNeko/beam-ime/releases/download/translate-en-v1/beam-translate-en-v1.gguf"
   }
 }

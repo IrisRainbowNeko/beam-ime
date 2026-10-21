@@ -79,6 +79,24 @@ cmake --build build/msys2 --parallel 4
 合并小狼毫和完整安装包使用上面的 Linux 交叉构建脚本。
 首发不支持 MSVC。
 
+## macOS（Apple 芯片）
+
+macOS 包在 Apple 芯片的 Mac 上构建，不重新编译 librime：插件对照固定版本鼠须管内的 `librime.1.dylib`
+（SHA-256 记录在 `dependencies.lock.json`）、同一修订的 librime 头文件和 Boost 头文件编译。
+需要 Xcode 命令行工具、CMake、Ninja 和带 pypinyin、PyYAML 的 Python 3。
+
+```sh
+brew install cmake ninja nlohmann-json
+python3 -m pip install pypinyin==0.55.0 PyYAML==6.0.2
+bash packaging/macos/build.sh deps build package
+BEAM_MODEL=models/beam-0.6b-q8_0.gguf BEAM_ADAPTER=beam-translate-en-v1.gguf bash packaging/macos/build.sh package
+```
+
+`deps` 下载并展开官方鼠须管安装包、librime 源码和 Boost 头文件；`build` 编译 Metal 版 `beamd`
+和 `librime-beam.dylib`，并在鼠须管自带的 librime 中运行插件测试；`package` 在 `dist/` 生成
+`Beam-<版本>-macos-arm64.pkg`，设置模型和 adapter 时另生成 `-offline.pkg`。
+安装包内的 Mach-O 文件使用 ad-hoc 签名，未公证。
+
 ## 测试
 
 ```sh

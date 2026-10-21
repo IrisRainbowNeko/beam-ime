@@ -3,7 +3,7 @@
 用首字母、部分拼音、全拼或中英文混输，直接生成整句候选。
 Beam 在本机运行 0.6B 语言模型，通过 Rime 接入桌面输入法；雾凇候选作为日常输入的补充。
 
-[下载安装包](https://github.com/IrisRainbowNeko/beam-ime/releases) · [开启本地学习（图文）](#本地个性化学习) · [English](README.en.md) · [安装教程](docs/install-linux.md) · [Windows](docs/install-windows.md)
+[下载安装包](https://github.com/IrisRainbowNeko/beam-ime/releases) · [开启本地学习（图文）](#本地个性化学习) · [English](README.en.md) · [安装教程](docs/install-linux.md) · [Windows](docs/install-windows.md) · [macOS（预览）](docs/install-macos.md)
 
 ## 工作原理
 
@@ -20,6 +20,7 @@ Beam 把上文和按键直接交给本机的 Beam-LLM（基于 Qwen3-0.6B 微调
 
 当前版本：**0.2.1**。面向 x86_64 的 Arch Linux、Ubuntu 24.04、Fedora 44 和 Windows 11。
 Linux 使用 Fcitx5-Rime，Windows 使用小狼毫 Weasel 0.17.4。
+Apple 芯片 Mac 的鼠须管 Squirrel 1.1.2 版本正在预览，暂不含个人学习，见 [macOS 安装](docs/install-macos.md)。
 
 | 系统 | 轻量包 | 离线包 | 教程 |
 |---|---|---|---|
@@ -152,7 +153,7 @@ bash tools/build.sh tests
 | `src/daemon` | `beamd` 服务 |
 | `src/rime` | 插件与雾凇方案 |
 | `src/learning` | SQLite 个人词库、拼音索引、排序和训练调度 |
-| `packaging` | Linux / Windows 打包和安装 |
+| `packaging` | Linux / Windows / macOS 打包和安装 |
 | `tools/models` | 训练、评测、GGUF 工具 |
 | `tests` | 核心、配置、安装恢复和可选模型测试 |
 
