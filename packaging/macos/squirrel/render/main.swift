@@ -61,6 +61,7 @@ traits.setCString(SquirrelApp.userDir.path(), to: \.user_data_dir)
 traits.setCString(SquirrelApp.logDir.path(), to: \.log_dir)
 traits.setCString("rime.render", to: \.app_name)
 rimeAPI.setup(&traits)
+rimeAPI.deployer_initialize(nil)  // registers config_file_update, as start_maintenance does for Squirrel
 rimeAPI.initialize(nil)
 guard rimeAPI.deploy_config_file("squirrel.yaml", "config_version") else { fatalError("cannot deploy squirrel.yaml") }
 let config = SquirrelConfig()
