@@ -105,15 +105,17 @@ jobs:
         if: always()
         with: {name: macos-package, path: 'dist/*'}
   squirrel-skin:
-    runs-on: macos-15
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - ref: 1.1.2
             patch: back-image.patch
-          - ref: master
+            os: macos-15
+          - ref: master  # NSGlassEffectView needs the macOS 26 SDK
             patch: back-image-upstream.patch
+            os: macos-26
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: bash packaging/macos/squirrel/build.sh ${{ matrix.ref }} packaging/macos/squirrel/${{ matrix.patch }} /tmp/squirrel-skin

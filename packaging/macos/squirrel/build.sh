@@ -19,7 +19,7 @@ git apply "$patch"
 ./action-install.sh
 make release ARCHS=arm64
 
-swiftc -O -target arm64-apple-macos13 -import-objc-header sources/Squirrel-Bridging-Header.h \
+swiftc -O -enable-bare-slash-regex -target arm64-apple-macos13 -import-objc-header sources/Squirrel-Bridging-Header.h \
   -I librime/src -I librime/include -L lib -lrime.1 -F Frameworks -framework Sparkle \
   -Xlinker -rpath -Xlinker "$PWD/lib" -Xlinker -rpath -Xlinker "$PWD/Frameworks" \
   $(ls sources/*.swift | grep -v '/Main.swift$') "$here/render/main.swift" -o "$work/render-panel"
