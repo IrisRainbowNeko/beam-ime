@@ -2,11 +2,11 @@
 """Create the macOS (Squirrel) light/offline installer packages from an existing build.
 
     python3 tools/package_macos.py --build build/macos/build --squirrel-pkg build/macos/downloads/Squirrel-1.1.2.pkg \
-        [--model beam-0.6b-q8_0.gguf --adapter beam-translate-en-v1.gguf]
+        --squirrel-executable build/macos/squirrel-src/Squirrel [--model beam-0.6b-q8_0.gguf --adapter beam-translate-en-v1.gguf]
 
 Runs on macOS (pkgbuild, productbuild, codesign). The payload goes to /Library/Application Support/Beam;
-postinstall puts the Rime plugin into Squirrel.app, re-signs it ad hoc, and runs `beamctl setup` for the
-logged-in user. The product also carries the official Squirrel package, installed when Squirrel is missing
+postinstall puts the Rime plugin and the patched Squirrel executable (skin images) into Squirrel.app, re-signs
+it ad hoc, and runs `beamctl setup` for the logged-in user. The product also carries the official Squirrel package, installed when Squirrel is missing
 or older than the pinned version.
 """
 import argparse
@@ -100,6 +100,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--build', type=Path, default=ROOT / 'build/macos/build')
     parser.add_argument('--squirrel-pkg', type=Path, required=True)
+    parser.add_argument('--squirrel-executable', type=Path, required=True,
+                        help='Squirrel built from the pinned source with packaging/macos/squirrel/back-image.patch')
     parser.add_argument('--model', type=Path, help='also make the offline package')
     parser.add_argument('--adapter', type=Path, help='translation adapter for the offline package')
     parser.add_argument('--output-dir', type=Path, default=ROOT / 'dist')
@@ -121,6 +123,8 @@ def main():
     share = base / 'share/beam-ime'
     if not (base / 'bin/beamd').exists() or not (base / 'lib/beam-ime/rime-plugins/librime-beam.dylib').exists():
         raise ValueError('build beamd and the Rime plugin (BEAM_RIME_LIBRARY) first')
+    (base / 'lib/squirrel').mkdir()
+    shutil.copy2(args.squirrel_executable, base / 'lib/squirrel/Squirrel')
     stage_rime(share / 'rime-data')
     schema = (ROOT / 'src/rime/beam_ice.schema.yaml').read_text(encoding='utf-8').splitlines(keepends=True)
     (share / 'rime/beam_ice.schema.yaml').write_text(

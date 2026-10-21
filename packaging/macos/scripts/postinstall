@@ -31,7 +31,9 @@ if [ ! -e "$PLUGINS/librime-beam.dylib" ]; then
 fi
 /usr/bin/killall Squirrel 2>/dev/null || true
 /usr/bin/ditto "$BEAM/lib/beam-ime/rime-plugins/librime-beam.dylib" "$PLUGINS/librime-beam.dylib"
-# Adding a file breaks the vendor seal; re-sign ad hoc and keep the entitlements (no sandbox,
+# Built from the same Squirrel source plus Beam's patch for skin images (back_image in squirrel.yaml).
+/usr/bin/ditto "$BEAM/lib/squirrel/Squirrel" "$APP/Contents/MacOS/Squirrel"
+# Changing the bundle breaks the vendor seal; re-sign ad hoc and keep the entitlements (no sandbox,
 # library validation off) and the hardened-runtime flag.
 /usr/bin/codesign --force --sign - --preserve-metadata=entitlements,flags "$APP"
 /usr/bin/codesign --verify --strict "$APP"

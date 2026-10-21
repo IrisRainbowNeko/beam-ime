@@ -1,10 +1,11 @@
 #!/bin/bash
-# Builds Squirrel from source with a skin-image patch, then renders the candidate panel with
-# a few test themes.
+# Builds Squirrel from source with a skin-image patch and optionally renders the candidate panel
+# with a few test themes.
 #
-#   build.sh <squirrel tag or branch> <patch> <work dir>
+#   build.sh <squirrel tag or branch> <patch> <work dir> [render]
 #
-# Leaves <work dir>/squirrel (the patched source tree and its build) and <work dir>/render/*.png.
+# Leaves <work dir>/squirrel (the patched source tree and its build), <work dir>/Squirrel (the
+# executable) and, with render, <work dir>/render/*.png.
 set -euo pipefail
 
 ref=$1
@@ -12,12 +13,15 @@ patch=$(cd "$(dirname "$2")" && pwd)/$(basename "$2")
 work=$(mkdir -p "$3" && cd "$3" && pwd)
 here=$(cd "$(dirname "$0")" && pwd)
 
+rm -rf "$work/squirrel"
 git clone --depth 1 --branch "$ref" https://github.com/rime/squirrel.git "$work/squirrel"
 cd "$work/squirrel"
 git submodule update --init --depth 1 librime plum
 git apply "$patch"
 ./action-install.sh
 make release ARCHS=arm64
+cp build/Build/Products/Release/Squirrel.app/Contents/MacOS/Squirrel "$work/Squirrel"
+[ "${4:-}" = render ] || exit 0
 
 swiftc -O -enable-bare-slash-regex -target arm64-apple-macos13 -import-objc-header sources/Squirrel-Bridging-Header.h \
   -I librime/src -I librime/include -L lib -lrime.1 -F Frameworks -framework Sparkle \

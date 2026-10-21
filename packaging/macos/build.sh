@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 # Build the macOS (Squirrel) package of Beam IME on an Apple Silicon Mac.
 #
-#   packaging/macos/build.sh [deps] [build] [package]
+#   packaging/macos/build.sh [deps] [build] [squirrel] [package]
 #   BEAM_MODEL=beam-0.6b-q8_0.gguf BEAM_ADAPTER=beam-translate-en-v1.gguf packaging/macos/build.sh package
 #
 # Outputs under build/macos:
 #   squirrel/            the pinned official Squirrel package, expanded; its librime.1.dylib is what
 #                        the plugin links against and what users have installed
 #   build/               beamd (llama.cpp, Metal + CPU), librime-beam.dylib, tests
+#   squirrel-src/Squirrel the Squirrel executable built from the same pinned source with Beam's
+#                        patch for skin images (back_image); it replaces the one in the official app
 #   ../../dist/Beam-<ver>-macos-arm64[-offline].pkg
-# Requirements: Xcode command line tools, cmake, ninja, git, python3 with pypinyin and PyYAML.
+# Requirements: Xcode (the squirrel stage), cmake, ninja, git, python3 with pypinyin and PyYAML.
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 M=$root/build/macos
 D=$M/downloads
-stages=${*:-deps build package}
+stages=${*:-deps build squirrel package}
 mkdir -p "$D"
 export CMAKE_BUILD_PARALLEL_LEVEL=${CMAKE_BUILD_PARALLEL_LEVEL:-$(sysctl -n hw.ncpu)}
 
@@ -74,14 +76,25 @@ build() {
         python3 -m unittest discover -s "$root/tests" -p test_rime_translation.py -v
 }
 
+squirrel() {
+    bash "$root/packaging/macos/squirrel/build.sh" "$SQUIRREL_VERSION" "$root/packaging/macos/squirrel/back-image.patch" \
+        "$M/squirrel-src"
+    local revision; revision=$(git -C "$M/squirrel-src/squirrel" rev-parse HEAD)
+    [ "$revision" = "$(lock squirrel revision)" ] || { echo "Squirrel $SQUIRREL_VERSION is $revision, not the pinned revision" >&2; exit 1; }
+    # The patched executable must load the official app's own frameworks (librime, Sparkle) just as the vendor build does.
+    bundled() { otool -arch arm64 -L "$1" | tail -n +2 | awk '{print $1}' | grep -v -e '^/usr/lib/' -e '^/System/' | sort; }
+    diff <(bundled "$SQUIRREL_APP/Contents/MacOS/Squirrel") <(bundled "$M/squirrel-src/Squirrel")
+}
+
 package() {
     python3 "$root/tools/package_macos.py" --build "$M/build" --squirrel-pkg "$SQUIRREL_PKG" \
+        --squirrel-executable "$M/squirrel-src/Squirrel" \
         ${BEAM_MODEL:+--model "$BEAM_MODEL"} ${BEAM_ADAPTER:+--adapter "$BEAM_ADAPTER"}
 }
 
 for stage in $stages; do
     case $stage in
-        deps|build|package) "$stage" ;;
+        deps|build|squirrel|package) "$stage" ;;
         *) echo "unknown stage $stage" >&2; exit 2 ;;
     esac
 done

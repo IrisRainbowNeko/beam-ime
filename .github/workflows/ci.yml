@@ -71,7 +71,7 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - run: brew install ninja nlohmann-json
       - run: python3 -m pip install --break-system-packages pypinyin==0.55.0 PyYAML==6.0.2
-      - run: bash packaging/macos/build.sh deps build package
+      - run: bash packaging/macos/build.sh deps build squirrel package
       - name: Package contents
         run: |
           pkgutil --expand-full dist/Beam-*-macos-arm64.pkg /tmp/beam-pkg
@@ -93,6 +93,7 @@ jobs:
           cat /Library/Logs/Beam/install.log
           codesign --verify --strict --verbose "/Library/Input Methods/Squirrel.app"
           codesign -d --entitlements - "/Library/Input Methods/Squirrel.app"
+          grep -q back_image_slice "/Library/Input Methods/Squirrel.app/Contents/MacOS/Squirrel"
           ls "/Library/Input Methods/Squirrel.app/Contents/Frameworks/rime-plugins"
           "/Library/Application Support/Beam/bin/beamctl" doctor || true
           sudo "/Library/Application Support/Beam/bin/beamctl" uninstall
@@ -118,11 +119,11 @@ jobs:
             os: macos-26
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - run: bash packaging/macos/squirrel/build.sh ${{ matrix.ref }} packaging/macos/squirrel/${{ matrix.patch }} /tmp/squirrel-skin
+      - run: bash packaging/macos/squirrel/build.sh ${{ matrix.ref }} packaging/macos/squirrel/${{ matrix.patch }} /tmp/squirrel-skin render
       - name: Lint as upstream does
         if: matrix.ref == 'master'
         run: |
-          brew install swiftlint peripheryapp/periphery/periphery
+          brew install swiftlint periphery
           cd /tmp/squirrel-skin/squirrel
           swiftlint
           periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore
