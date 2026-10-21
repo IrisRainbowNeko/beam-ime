@@ -82,6 +82,12 @@ jobs:
           otool -L "$beam/lib/beam-ime/rime-plugins/librime-beam.dylib"
       - name: Install, check and uninstall
         run: |
+          app="/Library/Input Methods/Squirrel.app"
+          # The official Squirrel first, as a user would have it; uninstall must give back exactly this.
+          sudo installer -pkg build/macos/downloads/Squirrel-*.pkg -target /
+          (cd "$app" && sudo find . -type f -exec shasum -a 256 {} + | sort) > /tmp/squirrel-before.txt
+          codesign --verify --strict --verbose=4 "$app" > /tmp/verify-before.txt 2>&1 || true
+          cat /tmp/verify-before.txt
           sudo installer -pkg dist/Beam-*-macos-arm64.pkg -target / || { cat /Library/Logs/Beam/install.log; exit 1; }
           cat /Library/Logs/Beam/install.log
           codesign --verify --strict --verbose "/Library/Input Methods/Squirrel.app"
@@ -90,8 +96,10 @@ jobs:
           "/Library/Application Support/Beam/bin/beamctl" doctor || true
           sudo "/Library/Application Support/Beam/bin/beamctl" uninstall
           test ! -e "/Library/Application Support/Beam"
-          test ! -e "/Library/Input Methods/Squirrel.app/Contents/Frameworks/rime-plugins/librime-beam.dylib"
-          codesign --verify --strict "/Library/Input Methods/Squirrel.app"
+          (cd "$app" && sudo find . -type f -exec shasum -a 256 {} + | sort) > /tmp/squirrel-after.txt
+          diff /tmp/squirrel-before.txt /tmp/squirrel-after.txt
+          codesign --verify --strict --verbose=4 "$app" > /tmp/verify-after.txt 2>&1 || true
+          diff /tmp/verify-before.txt /tmp/verify-after.txt
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with: {name: macos-package, path: 'dist/*'}
