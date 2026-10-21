@@ -19,8 +19,9 @@ macOS 版基于鼠须管 Squirrel 1.1.2，需要 Apple 芯片（M1 或更新）�
 ## 安装做了什么
 
 - Beam 程序装在 `/Library/Application Support/Beam`。
-- 插件 `librime-beam.dylib` 放进 `Squirrel.app/Contents/Frameworks/rime-plugins`。
-  添加文件会破坏鼠须管原有签名，安装器会用本机 ad-hoc 签名重签鼠须管，并保留原有 entitlements；
+- 插件 `librime-beam.dylib` 放进 `Squirrel.app/Contents/Frameworks/rime-plugins`，
+  `Contents/MacOS/Squirrel` 换成支持图片皮肤的同版本编译（见下文「图片皮肤」），librime 等其余文件不变。
+  改动会破坏鼠须管原有签名，安装器会用本机 ad-hoc 签名重签鼠须管，并保留原有 entitlements；
   原版鼠须管先备份到 `/Library/Application Support/Beam/backup`。
 - 为当前登录用户把雾凇和 Beam 方案装进 `~/Library/Rime`，在 `default.custom.yaml` 的方案列表中加入 `beam_ice`
   （先备份为 `default.custom.yaml.beam-backup`），并注册 LaunchAgent `io.github.irisrainbowneko.beam-ime`。
@@ -46,6 +47,27 @@ macOS 版基于鼠须管 Squirrel 1.1.2，需要 Apple 芯片（M1 或更新）�
 ```bash
 "/Library/Application Support/Beam/bin/beamctl" setup --cpu
 ```
+
+## 图片皮肤
+
+Beam 安装的鼠须管程序由同版本 1.1.2 源码加一个小补丁编译，配色方案可以用一张图片做候选窗背景
+（类似 Fcitx5 的图片主题）。在 `~/Library/Rime/squirrel.custom.yaml` 中：
+
+```yaml
+patch:
+  style/color_scheme: my_skin
+  preset_color_schemes/my_skin:
+    name: 我的皮肤
+    back_image: skins/panel.png          # 相对路径在 ~/Library/Rime 下
+    back_image_slice: {left: 116, right: 220, top: 0, bottom: 0}    # 九宫格：四角保持原尺寸，边和中间拉伸
+    back_image_padding: {left: 69, right: 195, top: 63, bottom: 36} # 窗口边缘到候选区的距离，只显示图片
+    back_color: 0x00FFFFFF               # 透明底色，露出图片
+    border_color: 0x00FFFFFF
+    candidate_text_color: 0xDB2E61
+```
+
+`back_image_slice` 和 `back_image_padding` 的单位是图片的点（72 dpi 的图片即像素）。从 Fcitx5 主题转换时，
+前者对应 `[InputPanel/Background/Margin]`，后者对应 `[InputPanel/ContentMargin]`。改完后在鼠须管菜单选「重新部署」。
 
 ## 鼠须管自动更新
 
