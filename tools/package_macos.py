@@ -2,7 +2,8 @@
 """Create the macOS (Squirrel) light/offline installer packages from an existing build.
 
     python3 tools/package_macos.py --build build/macos/build --squirrel-pkg build/macos/downloads/Squirrel-1.1.2.pkg \
-        --squirrel-executable build/macos/squirrel-src/Squirrel [--model beam-0.6b-q8_0.gguf --adapter beam-translate-en-v1.gguf]
+        --squirrel-executable build/macos/squirrel-src/bin/Squirrel \
+        [--model beam-0.6b-q8_0.gguf --adapter beam-translate-en-v1.gguf]
 
 Runs on macOS (pkgbuild, productbuild, codesign). The payload goes to /Library/Application Support/Beam;
 postinstall puts the Rime plugin and the patched Squirrel executable (skin images) into Squirrel.app, re-signs

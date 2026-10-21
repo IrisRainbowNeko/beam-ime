@@ -4,8 +4,9 @@
 #
 #   build.sh <squirrel tag or branch> <patch> <work dir> [render]
 #
-# Leaves <work dir>/squirrel (the patched source tree and its build), <work dir>/Squirrel (the
-# executable) and, with render, <work dir>/render/*.png.
+# Leaves <work dir>/squirrel (the patched source tree and its build), <work dir>/bin/Squirrel (the
+# executable; not next to squirrel/, which is the same name on a case-insensitive disk) and, with
+# render, <work dir>/render/*.png.
 set -euo pipefail
 
 ref=$1
@@ -20,7 +21,8 @@ git submodule update --init --depth 1 librime plum
 git apply "$patch"
 ./action-install.sh
 make release ARCHS=arm64
-cp build/Build/Products/Release/Squirrel.app/Contents/MacOS/Squirrel "$work/Squirrel"
+mkdir -p "$work/bin"
+cp build/Build/Products/Release/Squirrel.app/Contents/MacOS/Squirrel "$work/bin/Squirrel"
 [ "${4:-}" = render ] || exit 0
 
 swiftc -O -enable-bare-slash-regex -target arm64-apple-macos13 -import-objc-header sources/Squirrel-Bridging-Header.h \
