@@ -68,6 +68,7 @@ class AsyncClient {
     size_t learning_pending_ = 0;
     std::atomic<uint64_t> errors_{0};
     bool stopping_ = false;
+    std::chrono::steady_clock::time_point flush_until_;  // when stopping: deliver queued posts until then
     std::thread thread_;
 };
 

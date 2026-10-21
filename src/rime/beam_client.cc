@@ -1,5 +1,6 @@
 #include "beam_client.hpp"
 
+#include <algorithm>
 #include <nlohmann/json.hpp>
 
 namespace beam {
@@ -89,9 +90,16 @@ std::optional<nlohmann::json> Client::request(nlohmann::json req, int timeout_ms
 
 AsyncClient::AsyncClient(std::string path) : client_(std::move(path)), thread_([this] { run(); }) {}
 AsyncClient::~AsyncClient() {
+    // Queries are abandoned; notices already posted (a composition's end when the session closes)
+    // still go out, within a short budget so a stuck daemon cannot hold up Rime's teardown.
     { std::lock_guard<std::mutex> lock(mutex_); stopping_ = true;
-      for (auto & work : queue_) if (work.reply) work.reply->set_value(std::nullopt);
-      queue_.clear(); }
+      flush_until_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+      std::deque<Work> posts;
+      for (auto & work : queue_) {
+          if (work.reply) work.reply->set_value(std::nullopt);
+          else posts.push_back(std::move(work));
+      }
+      queue_ = std::move(posts); }
     available_.notify_one(); thread_.join();
 }
 bool AsyncClient::enqueue(Work work) {
@@ -120,8 +128,12 @@ void AsyncClient::run() {
                             learning_status_["installation"].value("state", "") == "installing";
           if (installing) available_.wait_for(lock, std::chrono::seconds(1), [&] { return stopping_ || !queue_.empty(); });
           else available_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
-          if (stopping_) return;
-          if (queue_.empty()) work = {{{"op", "learning"}, {"action", "status"}}, 400, {}};
+          if (stopping_) {
+              auto left = std::chrono::duration_cast<std::chrono::milliseconds>(flush_until_ - std::chrono::steady_clock::now()).count();
+              if (queue_.empty() || left <= 0) return;
+              work = std::move(queue_.front()); queue_.pop_front();
+              work.timeout = std::min<int>(work.timeout, (int) left);
+          } else if (queue_.empty()) work = {{{"op", "learning"}, {"action", "status"}}, 400, {}};
           else { work = std::move(queue_.front()); queue_.pop_front(); } }
         std::optional<nlohmann::json> reply;
         std::string error;
