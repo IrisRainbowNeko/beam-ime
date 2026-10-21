@@ -17,6 +17,7 @@
 #else
 #include <openssl/evp.h>
 #endif
+#include <signal.h>
 #include <spawn.h>
 #include <fcntl.h>
 #include <sys/wait.h>
