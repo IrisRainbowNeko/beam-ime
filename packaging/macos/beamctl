@@ -149,6 +149,15 @@ agent_start() {
         || echo "beamctl: the agent starts at your next login (launchctl bootstrap failed here)" >&2
 }
 
+# Squirrel's own installer registers and enables its input source; do the same, since Squirrel may
+# have been installed earlier and removed from the input sources. Leaves the user's choice of modes.
+enable_input_source() {
+    local squirrel=$SQUIRREL/Contents/MacOS/Squirrel
+    [ -x "$squirrel" ] || return 0
+    "$squirrel" --register-input-source >/dev/null 2>&1 || true
+    "$squirrel" --enable-input-source >/dev/null 2>&1 || true
+}
+
 redeploy() {
     # Squirrel picks up the new schema; it rebuilds the dictionaries on its next start otherwise.
     [ -x "$SQUIRREL/Contents/MacOS/Squirrel" ] && "$SQUIRREL/Contents/MacOS/Squirrel" --reload 2>/dev/null || true
@@ -188,9 +197,11 @@ setup() {
 PLIST
     /usr/bin/plutil -lint -s "$AGENT.beam-new" && mv -f "$AGENT.beam-new" "$AGENT"
     agent_start
+    enable_input_source
     redeploy
-    echo "Beam enabled. The model downloads in the background on first start (see $LOGS/agent.log);"
-    echo "until then Squirrel shows rime-ice candidates. Choose Beam 雾凇 in Squirrel's schema menu."
+    echo "Beam enabled. The model downloads in the background on first start; 'beamctl doctor' shows the progress"
+    echo "and $LOGS/agent.log any error. Until then Squirrel shows rime-ice candidates."
+    echo "Switch to Squirrel (鼠须管) in the input menu and choose Beam 雾凇 in its schema menu (Ctrl+\` or F4)."
 }
 
 disable() {
@@ -227,14 +238,25 @@ request() {
     printf '%s\n' "$1" | /usr/bin/nc -U -w 3 "$sock" | head -n 1
 }
 
+# "name done/total MiB" for a download in progress, else empty.
+download_progress() {
+    local part name total
+    for part in "$DATA"/models/*.part; do
+        [ -f "$part" ] || continue
+        name=$(basename "$part" .part)
+        total=$(if [ "$name" = "$(field filename)" ]; then field size; else field translateAdapter.size; fi)
+        echo "$name $(( $(stat -f %z "$part") / 1048576 ))/$((total / 1048576)) MiB"; return 0
+    done
+}
+
 doctor() {
     local version plugin=false signed=false model=false
     version=$(/usr/bin/plutil -extract CFBundleVersion raw -o - "$SQUIRREL/Contents/Info.plist" 2>/dev/null || echo missing)
     [ -f "$SQUIRREL/Contents/Frameworks/rime-plugins/librime-beam.dylib" ] && plugin=true
     /usr/bin/codesign --verify --strict "$SQUIRREL" 2>/dev/null && signed=true
     [ -f "$(model_path)" ] && model=true
-    printf '{"version":"%s","squirrel":"%s","plugin":%s,"squirrelSignatureValid":%s,"modelInstalled":%s,"agent":%s,\n "service":%s}\n' \
-        "$(cat "$SHARE/VERSION" 2>/dev/null || echo unknown)" "$version" "$plugin" "$signed" "$model" \
+    printf '{"version":"%s","squirrel":"%s","plugin":%s,"squirrelSignatureValid":%s,"modelInstalled":%s,"downloading":"%s","agent":%s,\n "service":%s}\n' \
+        "$(cat "$SHARE/VERSION" 2>/dev/null || echo unknown)" "$version" "$plugin" "$signed" "$model" "$(download_progress)" \
         "$([ -f "$AGENT" ] && echo true || echo false)" "$(request '{"id":1,"op":"health"}')"
 }
 
