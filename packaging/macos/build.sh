@@ -65,7 +65,7 @@ build() {
         ${BEAM_LLAMA_SOURCE:+-DBEAM_LLAMA_SOURCE=$BEAM_LLAMA_SOURCE} \
         -DBEAM_RIME_LIBRARY="$SQUIRREL_APP/Contents/Frameworks/librime.1.dylib" \
         -DBEAM_RIME_SOURCE="$RIME_SOURCE" -DRIME_VERSION="$RIME_VERSION" -DBEAM_BOOST_INCLUDE="$BOOST" \
-        -DBEAM_RIME_PLUGIN_DIR=lib/beam-ime/rime-plugins
+        -DBEAM_RIME_PLUGIN_DIR:STRING=lib/beam-ime/rime-plugins  # relative to the prefix; a PATH value would be made absolute
     cmake --build "$M/build"
     cmake --build "$M/build" --target rime_smoke
     ctest --test-dir "$M/build" --output-on-failure
