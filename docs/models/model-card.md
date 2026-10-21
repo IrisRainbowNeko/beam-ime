@@ -26,3 +26,6 @@ No remote inference is used. More aggressive quantization has not been made
 the default. See `docs/testing.md` for measurements from the packaged engine.
 
 Base model: https://huggingface.co/Qwen/Qwen3-0.6B-Base
+
+Full-precision (bf16) weights: https://huggingface.co/7eu7d7/beam-ime-0.6b. Re-quantizing them to Q8_0
+reproduces every tensor of `beam-0.6b-q8_0.gguf` byte for byte; the GGUF stores the tied output head once.

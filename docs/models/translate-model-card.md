@@ -43,4 +43,5 @@ The English is only right when the Chinese reading is right. Alternatives for pr
 or more letters is tolerated; more is not. Candidate order is not a confidence estimate.
 
 The PEFT checkpoint (`beam-translate-en-v1-lora.tar.gz`) applies to the full-precision r5-v2ex
-checkpoint, which is not published; the GGUF works with the released Q8_0 model.
+checkpoint, published as bf16 at [7eu7d7/beam-ime-0.6b](https://huggingface.co/7eu7d7/beam-ime-0.6b); its
+`adapter_config.json` names that base `beam-0.6b-r5-v2ex`. The GGUF works with the released Q8_0 model.
