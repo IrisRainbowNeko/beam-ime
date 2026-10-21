@@ -104,3 +104,30 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with: {name: macos-package, path: 'dist/*'}
+  squirrel-skin:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - ref: 1.1.2
+            patch: back-image.patch
+          - ref: master
+            patch: back-image-upstream.patch
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: bash packaging/macos/squirrel/build.sh ${{ matrix.ref }} packaging/macos/squirrel/${{ matrix.patch }} /tmp/squirrel-skin
+      - name: Lint as upstream does
+        if: matrix.ref == 'master'
+        run: |
+          brew install swiftlint peripheryapp/periphery/periphery
+          cd /tmp/squirrel-skin/squirrel
+          swiftlint
+          periphery scan --relative-results --skip-build --index-store-path build/Index.noindex/DataStore
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: squirrel-skin-${{ matrix.ref }}
+          path: |
+            /tmp/squirrel-skin/render
+            /tmp/squirrel-skin/squirrel/build/Build/Products/Release/Squirrel.app/Contents/MacOS/Squirrel

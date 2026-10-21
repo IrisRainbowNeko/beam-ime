@@ -1,0 +1,209 @@
+diff --git a/data/squirrel.yaml b/data/squirrel.yaml
+index 40227de..c9c014d 100644
+--- a/data/squirrel.yaml
++++ b/data/squirrel.yaml
+@@ -64,6 +64,14 @@ style:
+   #comment_font_face: 'Avenir'
+   #comment_font_point: 16
+ 
++# A color scheme may draw an image behind the candidate panel (a relative path is in ~/Library/Rime):
++#   back_image: skins/panel.png
++#   # nine-slice in image points: the corners keep their size, the edges and the center stretch
++#   back_image_slice: { left: 40, right: 40, top: 20, bottom: 20 }
++#   # room between the window edge and the panel, where only the image shows
++#   back_image_padding: { left: 30, right: 60, top: 20, bottom: 20 }
++# Give back_color a zero alpha (e.g. 0x00ffffff) to see the image under the candidates as well.
++
+ preset_color_schemes:
+   native:
+     name: 系統配色
+diff --git a/sources/SquirrelPanel.swift b/sources/SquirrelPanel.swift
+index 6713166..2913ad6 100644
+--- a/sources/SquirrelPanel.swift
++++ b/sources/SquirrelPanel.swift
+@@ -10,6 +10,9 @@ import AppKit
+ final class SquirrelPanel: NSPanel {
+   private let view: SquirrelView
+   private let back: NSVisualEffectView
++  // The panel's own drawing; inside the window, inset by the theme's back_image_padding.
++  private let panelView = NSView()
++  private let skin = NSView()
+   var inputController: SquirrelInputController?
+ 
+   var position: NSRect
+@@ -47,10 +50,14 @@ final class SquirrelPanel: NSPanel {
+     back.state = .active
+     back.wantsLayer = true
+     back.layer?.mask = view.shape
++    panelView.addSubview(back)
++    panelView.addSubview(view)
++    panelView.addSubview(view.textView)
++    skin.wantsLayer = true
++    skin.isHidden = true
+     let contentView = NSView()
+-    contentView.addSubview(back)
+-    contentView.addSubview(view)
+-    contentView.addSubview(view.textView)
++    contentView.addSubview(skin)
++    contentView.addSubview(panelView)
+     self.contentView = contentView
+   }
+ 
+@@ -365,6 +372,7 @@ private extension SquirrelPanel {
+     view.textContainer.size = NSSize(width: textWidth, height: maxTextHeight)
+ 
+     var panelRect = NSRect.zero
++    var padding = NSEdgeInsetsZero
+     // in vertical mode, the width and height are interchanged
+     var contentRect = view.contentRect
+     if theme.memorizeSize && (vertical && position.midY / screenRect.height < 0.5) ||
+@@ -380,6 +388,9 @@ private extension SquirrelPanel {
+     if vertical {
+       panelRect.size = NSSize(width: min(0.95 * screenRect.width, contentRect.height + theme.edgeInset.height * 2),
+                               height: min(0.95 * screenRect.height, contentRect.width + theme.edgeInset.width * 2) + theme.pagingOffset)
++      padding = backImagePadding(theme: theme, panelSize: panelRect.size)
++      panelRect.size.width += padding.left + padding.right
++      panelRect.size.height += padding.top + padding.bottom
+ 
+       // To avoid jumping up and down while typing, use the lower screen when
+       // typing on upper, and vice versa
+@@ -398,7 +409,10 @@ private extension SquirrelPanel {
+       panelRect.size = NSSize(width: min(0.95 * screenRect.width, contentRect.width + theme.edgeInset.width * 2),
+                               height: min(0.95 * screenRect.height, contentRect.height + theme.edgeInset.height * 2))
+       panelRect.size.width += theme.pagingOffset
+-      panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
++      padding = backImagePadding(theme: theme, panelSize: panelRect.size)
++      panelRect.size.width += padding.left + padding.right
++      panelRect.size.height += padding.top + padding.bottom
++      panelRect.origin = NSPoint(x: position.minX - theme.pagingOffset - padding.left, y: position.minY - SquirrelTheme.offsetHeight - panelRect.height)
+     }
+     if panelRect.maxX > screenRect.maxX {
+       panelRect.origin.x = screenRect.maxX - panelRect.width
+@@ -421,25 +435,28 @@ private extension SquirrelPanel {
+     }
+     self.setFrame(panelRect, display: true)
+ 
++    panelView.frame = NSRect(x: padding.left, y: padding.bottom, width: panelRect.width - padding.left - padding.right,
++                             height: panelRect.height - padding.top - padding.bottom)
+     // rotate the view, the core in vertical mode!
+     if vertical {
+-      contentView!.boundsRotation = -90
+-      contentView!.setBoundsOrigin(NSPoint(x: 0, y: panelRect.width))
++      panelView.boundsRotation = -90
++      panelView.setBoundsOrigin(NSPoint(x: 0, y: panelView.frame.width))
+     } else {
+-      contentView!.boundsRotation = 0
+-      contentView!.setBoundsOrigin(.zero)
++      panelView.boundsRotation = 0
++      panelView.setBoundsOrigin(.zero)
+     }
++    showBackImage(theme: theme, size: panelRect.size)
+     view.textView.boundsRotation = 0
+     view.textView.setBoundsOrigin(.zero)
+ 
+-    view.frame = contentView!.bounds
+-    view.textView.frame = contentView!.bounds
++    view.frame = panelView.bounds
++    view.textView.frame = panelView.bounds
+     view.textView.frame.size.width -= theme.pagingOffset
+     view.textView.frame.origin.x += theme.pagingOffset
+     view.textView.textContainerInset = theme.edgeInset
+ 
+     if theme.translucency {
+-      back.frame = contentView!.bounds
++      back.frame = panelView.bounds
+       back.frame.size.width += theme.pagingOffset
+       back.appearance = NSApp.effectiveAppearance
+       back.isHidden = false
+@@ -473,4 +490,29 @@ private extension SquirrelPanel {
+     let endPos = range.upperBound.utf16Offset(in: string)
+     return NSRange(location: startPos, length: endPos - startPos)
+   }
++
++  // The window must be large enough for the image's fixed corners; the extra room goes to the
++  // right and bottom so the panel stays next to the cursor.
++  func backImagePadding(theme: SquirrelTheme, panelSize: NSSize) -> NSEdgeInsets {
++    guard theme.backImage != nil else { return NSEdgeInsetsZero }
++    var padding = theme.backImagePadding
++    let slice = theme.backImageSlice
++    padding.right += max(0, slice.left + slice.right - (panelSize.width + padding.left + padding.right))
++    padding.bottom += max(0, slice.top + slice.bottom - (panelSize.height + padding.top + padding.bottom))
++    return padding
++  }
++
++  func showBackImage(theme: SquirrelTheme, size: NSSize) {
++    guard let image = theme.backImage, let layer = skin.layer else {
++      skin.isHidden = true
++      skin.layer?.contents = nil
++      return
++    }
++    skin.frame = NSRect(origin: .zero, size: size)
++    layer.contents = image
++    layer.contentsScale = theme.backImageScale
++    layer.contentsGravity = .resize
++    layer.contentsCenter = theme.backImageCenter
++    skin.isHidden = false
++  }
+ }
+diff --git a/sources/SquirrelTheme.swift b/sources/SquirrelTheme.swift
+index feacfcc..45341bc 100644
+--- a/sources/SquirrelTheme.swift
++++ b/sources/SquirrelTheme.swift
+@@ -67,6 +67,14 @@ final class SquirrelTheme {
+   private(set) var inlineCandidate = false
+   private(set) var showPaging = false
+ 
++  // Skin image drawn behind the panel: a nine-slice grid whose corners keep their size, while the
++  // edges and center stretch. back_image_padding is extra room between the window edge and the panel.
++  private(set) var backImage: CGImage?
++  private(set) var backImageScale: CGFloat = 1
++  private(set) var backImageCenter = CGRect(x: 0, y: 0, width: 1, height: 1)
++  private(set) var backImageSlice = NSEdgeInsetsZero
++  private(set) var backImagePadding = NSEdgeInsetsZero
++
+   private var fonts = [NSFont]()
+   private var labelFonts = [NSFont]()
+   private var commentFonts = [NSFont]()
+@@ -272,6 +280,11 @@ final class SquirrelTheme {
+         preeditLinespace ?= config.getDouble("\(prefix)/spacing")
+         baseOffset ?= config.getDouble("\(prefix)/base_offset")
+         shadowSize ?= config.getDouble("\(prefix)/shadow_size").map { max(0, $0) }
++
++        if let path = config.getString("\(prefix)/back_image") {
++          loadBackImage(path: path, slice: insets(config, "\(prefix)/back_image_slice"))
++          backImagePadding = insets(config, "\(prefix)/back_image_padding")
++        }
+       }
+     } else {
+       available = false
+@@ -287,6 +300,30 @@ final class SquirrelTheme {
+ }
+ 
+ private extension SquirrelTheme {
++  func insets(_ config: SquirrelConfig, _ option: String) -> NSEdgeInsets {
++    func value(_ side: String) -> CGFloat { max(0, config.getDouble("\(option)/\(side)") ?? 0) }
++    return NSEdgeInsets(top: value("top"), left: value("left"), bottom: value("bottom"), right: value("right"))
++  }
++
++  // A relative path is in the Rime user directory, like the rest of the user's configuration.
++  func loadBackImage(path: String, slice: NSEdgeInsets) {
++    let expanded = (path as NSString).expandingTildeInPath
++    let url = expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded) : SquirrelApp.userDir.appending(path: expanded)
++    guard let image = NSImage(contentsOf: url), image.size.width > 0, image.size.height > 0,
++          let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { return }
++    let size = image.size
++    backImage = cgImage
++    backImageScale = CGFloat(cgImage.width) / size.width
++    // The slice is in points of the image; corners that would overlap are reduced to meet halfway.
++    let left = min(slice.left, size.width / 2), right = min(slice.right, size.width - left)
++    let top = min(slice.top, size.height / 2), bottom = min(slice.bottom, size.height - top)
++    backImageSlice = NSEdgeInsets(top: top, left: left, bottom: bottom, right: right)
++    // Unit rectangle of the stretchable center; layer contents have their origin at the bottom left.
++    backImageCenter = CGRect(x: left / size.width, y: bottom / size.height,
++                             width: max(0, size.width - left - right) / size.width,
++                             height: max(0, size.height - top - bottom) / size.height)
++  }
++
+   func combineFonts(_ fonts: [NSFont], size: CGFloat?) -> NSFont? {
+     if fonts.count == 0 { return nil }
+     if fonts.count == 1 {
