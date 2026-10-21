@@ -11,7 +11,7 @@ import beamctl
 class SetupTests(unittest.TestCase):
     def test_upgrade_keeps_custom_model_and_cpu(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory).resolve()  # macOS: /var is a symlink to /private/var
             state = root / 'state'
             state.mkdir()
             model = root / 'custom.gguf'
